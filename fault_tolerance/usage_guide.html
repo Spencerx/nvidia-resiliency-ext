@@ -1,0 +1,246 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Usage guide &mdash; nvidia-resiliency-ext 0.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=2709fde1"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+      <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Integration Guides" href="integration.html" />
+    <link rel="prev" title="Fault Tolerance" href="index.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            nvidia-resiliency-ext
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Documentation contents:</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Fault Tolerance</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Usage guide</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#terms">Terms</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#design-overview">Design Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#usage-overview">Usage Overview</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#ft-launcher">FT launcher</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#hang-detection">Hang detection</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#workload-control">Workload control</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#deprecated-arguments">Deprecated arguments</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="integration.html">Integration Guides</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html">API documentation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples.html">Examples</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../inprocess/index.html">Inprocess Restart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../checkpointing/async/index.html">Async Checkpointing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../checkpointing/local/index.html">Local Checkpointing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../straggler_det/index.html">Straggler Detection</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">nvidia-resiliency-ext</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Fault Tolerance</a></li>
+      <li class="breadcrumb-item active">Usage guide</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/fault_tolerance/usage_guide.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="usage-guide">
+<h1>Usage guide<a class="headerlink" href="#usage-guide" title="Link to this heading"></a></h1>
+<section id="terms">
+<h2>Terms<a class="headerlink" href="#terms" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Fault</span> <span class="pre">Tolerance</span></code>, <code class="docutils literal notranslate"><span class="pre">FT</span></code> is the <code class="docutils literal notranslate"><span class="pre">fault_tolerance</span></code> package.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FT</span> <span class="pre">callback</span></code>, <code class="docutils literal notranslate"><span class="pre">FaultToleranceCallback</span></code> is a PTL callback that integrates FT with PTL.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code> is a launcher tool included in FT, which is based on <code class="docutils literal notranslate"><span class="pre">torchrun</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">heartbeat</span></code> is a lightweight message sent from a rank to its rank monitor that indicates that a rank is alive.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">section</span></code> is a user code segment with a custom name assigned.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">rank</span> <span class="pre">monitor</span></code> is a special side process started by <code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code> that monitors its rank.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">timeouts</span></code> are time intervals used by a rank monitor to detect that a rank is not alive.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">launcher</span> <span class="pre">script</span></code> is a bash script that invokes <code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">PTL</span></code> is PyTorch Lightning.</p></li>
+</ul>
+</section>
+<section id="design-overview">
+<h2>Design Overview<a class="headerlink" href="#design-overview" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Each node runs a single <code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code>.</p></li>
+<li><p>FT configuration is passed to <code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code> and propagated to other FT components.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code> spawns rank monitors (once).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code> spawns ranks (can also respawn if <code class="docutils literal notranslate"><span class="pre">--max-restarts</span></code> is greater than 0).</p></li>
+<li><p>Each rank uses <code class="docutils literal notranslate"><span class="pre">RankMonitorClient</span></code> to connect to its monitor (<code class="docutils literal notranslate"><span class="pre">RankMonitorServer</span></code>).</p></li>
+<li><p>Each rank periodically sends updates to its rank monitor (e.g., during each training and evaluation step).</p></li>
+<li><p>In case of a hang, the rank monitor detects missing updates from its rank and terminates it.</p></li>
+<li><p>If any ranks disappear, <code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code> detects that and terminates or restarts the workload.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code> instances communicate via the <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> “rendezvous” mechanism.</p></li>
+<li><p>Rank monitors do not communicate with each other.</p></li>
+</ul>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span># Processes structure on a single node.
+# NOTE: each rank has its own separate rank monitor.
+
+[Rank_N]----(IPC)----[Rank Monitor_N]
+   |                      |
+   |                      |
+(re/spawns)            (spawns)
+   |                      |
+   |                      |
+[ft_launcher]-------------
+</pre></div>
+</div>
+</section>
+<section id="usage-overview">
+<h2>Usage Overview<a class="headerlink" href="#usage-overview" title="Link to this heading"></a></h2>
+<section id="ft-launcher">
+<h3>FT launcher<a class="headerlink" href="#ft-launcher" title="Link to this heading"></a></h3>
+<p>Fault tolerance includes a launcher tool called <code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code>, which is based on <code class="docutils literal notranslate"><span class="pre">torchrun</span></code>
+and supports most <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> command-line parameters. FT configuration can be specified either
+via a YAML file using <code class="docutils literal notranslate"><span class="pre">--ft-cfg-path</span></code> or through command-line parameters
+using <code class="docutils literal notranslate"><span class="pre">--ft-&lt;parameter-name&gt;</span></code>.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">--max-restarts</span></code> is specified, the launcher restarts failed workers.
+The restart behavior depends on the <code class="docutils literal notranslate"><span class="pre">--ft-restart-policy</span></code> parameter, which supports two modes:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">any-failed</span></code> (default)
+All workers are restarted if any worker fails.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">min-healthy</span></code>
+Workers are restarted when the number of healthy nodes (nodes where all worker processes are running)
+falls below the minimum specified in <code class="docutils literal notranslate"><span class="pre">--nnodes</span></code>. This allows for some worker failures to be handled
+without restarting remaining workers, e.g., with the <a class="reference internal" href="../inprocess/index.html"><span class="doc">Inprocess Restart</span></a>.
+For details on how <code class="docutils literal notranslate"><span class="pre">min-healthy</span></code> policy interacts with <a class="reference internal" href="../inprocess/index.html"><span class="doc">Inprocess Restart</span></a> see <a class="reference internal" href="integration/inprocess.html"><span class="doc">FT Launcher &amp; Inprocess integration</span></a>.</p></li>
+</ul>
+</section>
+<section id="hang-detection">
+<h3>Hang detection<a class="headerlink" href="#hang-detection" title="Link to this heading"></a></h3>
+<p>The FT package provides two fully independent mechanisms for detecting hangs in user code.
+Users can choose the API that is best suited for their needs, or use both APIs at the same time.</p>
+<ul class="simple">
+<li><p>Heartbeats API</p></li>
+</ul>
+<p>The training script periodically sends <cite>heartbeats</cite> to the monitor.
+If no heartbeat arrives in a defined time, the workload is considered hung.
+This API is the simplest to use but might require coarse timeouts
+that need to cover a wide range of possible intervals between heartbeats.
+Please find more details in <a class="reference internal" href="integration/heartbeats.html"><span class="doc">Heartbeats API Integration</span></a>.</p>
+<ul class="simple">
+<li><p>Sections API</p></li>
+</ul>
+<p>Some parts of the training scripts are wrapped in <cite>sections</cite>.
+If any section is opened for too long, the workload is considered hung.
+The sections-based API requires more changes in the user code, but timeouts
+can be defined more precisely, and hangs can be detected quicker.
+Please find more details in <a class="reference internal" href="integration/sections.html"><span class="doc">Sections API Integration</span></a>.</p>
+</section>
+<section id="workload-control">
+<h3>Workload control<a class="headerlink" href="#workload-control" title="Link to this heading"></a></h3>
+<p>In some cases, it might be useful to control the <code class="docutils literal notranslate"><span class="pre">ft_launcher</span></code> behavior based on a rank state.
+For example, if an irrecoverable error is encountered in a rank, it might be reasonable to break
+the launcher restarting loop and exit instead of restarting; for other exception types, one might
+want to exclude the current node from subsequent restart attempts. <code class="docutils literal notranslate"><span class="pre">RankMonitorClient</span></code> exposes the
+<a class="reference internal" href="api/client.html#nvidia_resiliency_ext.fault_tolerance.rank_monitor_client.RankMonitorClient.send_workload_control_request" title="nvidia_resiliency_ext.fault_tolerance.rank_monitor_client.RankMonitorClient.send_workload_control_request"><code class="xref py py-meth docutils literal notranslate"><span class="pre">nvidia_resiliency_ext.fault_tolerance.rank_monitor_client.RankMonitorClient.send_workload_control_request()</span></code></a>
+API, which can be used to control the workload restarting logic implemented in the launcher.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Please note that only the ft_launcher behavior is affected by this call.
+The fault tolerance package is job scheduler-agnostic,
+i.e., it does not control underlying SLURM job allocations.</p>
+</div>
+</section>
+<section id="deprecated-arguments">
+<h3>Deprecated arguments<a class="headerlink" href="#deprecated-arguments" title="Link to this heading"></a></h3>
+<p>The following arguments are deprecated and will be removed in a future version:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--ft-param-*</span></code> arguments (replaced by <code class="docutils literal notranslate"><span class="pre">--ft-*</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--fault-tol-cfg-path</span></code> (replaced by <code class="docutils literal notranslate"><span class="pre">--ft-cfg-path</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--ignore-missing-fault-tol-cfg</span></code> (deprecated completely)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--restart-policy</span></code> (replaced by <code class="docutils literal notranslate"><span class="pre">--ft-restart-policy</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--restart_policy</span></code> (replaced by <code class="docutils literal notranslate"><span class="pre">--ft-restart-policy</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--ft_param_link_down_path_template</span></code> (replaced by <code class="docutils literal notranslate"><span class="pre">--ft-link-down-path-template</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--ft_param_enable_nic_monitor</span></code> (replaced by <code class="docutils literal notranslate"><span class="pre">--ft-enable-nic-monitor</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--ft_param_pci_topo_file</span></code> (replaced by <code class="docutils literal notranslate"><span class="pre">--ft-pci-topo-file</span></code>)</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="index.html" class="btn btn-neutral float-left" title="Fault Tolerance" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="integration.html" class="btn btn-neutral float-right" title="Integration Guides" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NVIDIA Corporation.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
