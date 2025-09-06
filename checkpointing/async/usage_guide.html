@@ -102,7 +102,6 @@
 <p>The <a class="reference internal" href="api/core.html#nvidia_resiliency_ext.checkpointing.async_ckpt.core.AsyncCallsQueue" title="nvidia_resiliency_ext.checkpointing.async_ckpt.core.AsyncCallsQueue"><code class="xref py py-class docutils literal notranslate"><span class="pre">nvidia_resiliency_ext.checkpointing.async_ckpt.core.AsyncCallsQueue</span></code></a>
 provides application users with an interface to schedule <a class="reference internal" href="api/core.html#nvidia_resiliency_ext.checkpointing.async_ckpt.core.AsyncRequest" title="nvidia_resiliency_ext.checkpointing.async_ckpt.core.AsyncRequest"><code class="xref py py-class docutils literal notranslate"><span class="pre">nvidia_resiliency_ext.checkpointing.async_ckpt.core.AsyncRequest</span></code></a>,
 which defines checkpoint routine, its args/kwargs and finalization steps when the checkpoint routine is finished.
-This class is a singleton, implying each rank will have only one instance of this class.
 It is recommended to call the <cite>close()</cite> API on the <cite>AsyncCallsQueue</cite> at the end of training to ensure a clean shutdown of the process that manages async checkpointing.
 We also extend the API of <cite>abort_nvrx_checkpoint()</cite> to abort the async processes and cleanly restart the <cite>AsyncCallsQueue</cite> in case of any restarts of the training processes.</p>
 <dl class="simple">
@@ -221,7 +220,7 @@ pip<span class="w"> </span>install<span class="w"> </span>multi-storage-client<s
 </section>
 <section id="basic-usage">
 <h3>Basic Usage<a class="headerlink" href="#basic-usage" title="Link to this heading"></a></h3>
-<p>To enable MSC integration, simply pass <code class="docutils literal notranslate"><span class="pre">use_msc=True</span></code> when creating the <code class="docutils literal notranslate"><span class="pre">FileSystemWriterAsync</span></code> instance:</p>
+<p>To enable MSC integration, simply pass <code class="docutils literal notranslate"><span class="pre">use_msc=True</span></code> when creating the <code class="docutils literal notranslate"><span class="pre">FileSystemWriterAsync</span></code> instance.</p>
 <p>The MSC URL scheme is <code class="docutils literal notranslate"><span class="pre">msc://&lt;profile-name&gt;/&lt;path&gt;</span></code>. The example below shows how to save a checkpoint to the <code class="docutils literal notranslate"><span class="pre">model-checkpoints</span></code> profile, the data will be stored in the <code class="docutils literal notranslate"><span class="pre">bucket-checkpoints</span></code> bucket in AWS S3.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">nvidia_resiliency_ext.checkpointing.async_ckpt.filesystem_async</span><span class="w"> </span><span class="kn">import</span> <span class="n">FileSystemWriterAsync</span>
 
@@ -235,7 +234,7 @@ pip<span class="w"> </span>install<span class="w"> </span>multi-storage-client<s
 </section>
 <section id="example-saving-and-loading-checkpoints-with-msc">
 <h3>Example: Saving and Loading Checkpoints with MSC<a class="headerlink" href="#example-saving-and-loading-checkpoints-with-msc" title="Link to this heading"></a></h3>
-<p>The following example demonstrates a complete workflow for saving and loading checkpoints using Multi-Storage Client integration:</p>
+<p>The following code demonstrates a complete workflow for saving and loading checkpoints using Multi-Storage Client integrations. The <a href="#id2"><span class="problematic" id="id3">`FileSystemWriter example`_</span></a> also provides an <code class="docutils literal notranslate"><span class="pre">enable_msc</span></code> option to use MSC for checkpoint saving and loading.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch.distributed.checkpoint</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">DefaultLoadPlanner</span><span class="p">,</span>
