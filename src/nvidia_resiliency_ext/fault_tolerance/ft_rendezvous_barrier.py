@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
 from types import FrameType
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from torch.distributed import PrefixStore, Store
 from torch.distributed.elastic.events import NodeState, construct_and_record_rdzv_event
@@ -129,6 +129,10 @@ class RendezvousTimeout:
     Args:
         join:
             The time within which the rendezvous is expected to complete.
+        last_call:
+            An additional wait amount before completing a restart rendezvous
+            once enough hot-spare candidates are present but previous active
+            nodes are still missing.
         close:
             The time within which the rendezvous is expected to close after a
             call to :py:meth:`RendezvousHandler.set_closed` or
@@ -142,26 +146,34 @@ class RendezvousTimeout:
 
     _DEFAULT_TIMEOUTS = {
         "join": timedelta(seconds=600),
+        "last_call": timedelta(seconds=15),
         "close": timedelta(seconds=30),
         "heartbeat": timedelta(seconds=5),
     }
 
     _join: timedelta
+    _last_call: timedelta
     _close: timedelta
     _heartbeat: timedelta
 
     def __init__(
         self,
         join: Optional[timedelta] = None,
+        last_call: Optional[timedelta] = None,
         close: Optional[timedelta] = None,
         heartbeat: Optional[timedelta] = None,
     ) -> None:
-        self._set_timeouts(join=join, close=close, heartbeat=heartbeat)
+        self._set_timeouts(join=join, last_call=last_call, close=close, heartbeat=heartbeat)
 
     @property
     def join(self) -> timedelta:
         """Get the join timeout."""
         return self._join
+
+    @property
+    def last_call(self) -> timedelta:
+        """Get the last call timeout."""
+        return self._last_call
 
     @property
     def close(self) -> timedelta:
@@ -354,6 +366,69 @@ class RendezvousStoreValue:
             raise ValueError(f"Invalid rendezvous store value: {e}")
 
 
+@dataclass(frozen=True)
+class _CloseRoundDecision:
+    """Decision returned by the previous-active last-call gate."""
+
+    should_close: bool
+    missing_previous_active: Tuple[int, ...] = ()
+    last_call_deadline: Optional[float] = None
+
+
+class _PreviousActiveLastCallGate:
+    """Delay restart-round closure while previous active nodes may still rejoin."""
+
+    def __init__(
+        self,
+        previous_active_infra_ranks: Optional[Set[int]],
+        timeout_seconds: float,
+        enabled: bool,
+    ) -> None:
+        self._previous_active_infra_ranks = previous_active_infra_ranks or set()
+        self._timeout_seconds = timeout_seconds
+        self._enabled = (
+            enabled and bool(self._previous_active_infra_ranks) and self._timeout_seconds > 0.0
+        )
+        self._deadline: Optional[float] = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def evaluate(
+        self,
+        participants: List[Tuple[_NodeDesc, int, str]],
+        now: float,
+    ) -> _CloseRoundDecision:
+        if not self._enabled:
+            return _CloseRoundDecision(should_close=True)
+
+        current_infra_ranks = {
+            infra_rank
+            for _, infra_rank, domain_id in participants
+            if domain_id != WITHDRAWN and infra_rank >= 0
+        }
+        missing = tuple(sorted(self._previous_active_infra_ranks - current_infra_ranks))
+        if not missing:
+            return _CloseRoundDecision(should_close=True)
+
+        if self._deadline is None:
+            self._deadline = now + self._timeout_seconds
+
+        if now >= self._deadline:
+            return _CloseRoundDecision(
+                should_close=True,
+                missing_previous_active=missing,
+                last_call_deadline=self._deadline,
+            )
+
+        return _CloseRoundDecision(
+            should_close=False,
+            missing_previous_active=missing,
+            last_call_deadline=self._deadline,
+        )
+
+
 class _StaleRendezvousRoundError(RuntimeError):
     """Raised when a reused key already contains data from a newer rendezvous round."""
 
@@ -448,14 +523,15 @@ class _RendezvousBarrierState:
     1. ATOMIC BARRIER: Uses atomic increments for slot allocation and per-key
        compare-and-swap writes for reused slot/rank state
 
-    2. GRACEFUL COMPLETION: Completes rendezvous on last_call_timeout rather than
-       waiting for max_nodes, enabling hot-fix scenarios and flexible scaling
+    2. GRACEFUL COMPLETION: Completes rendezvous once enough valid participants
+       are present; restart rounds with hot spares use a bounded last_call_timeout
+       so previous active nodes can rejoin before spares are accepted.
 
     3. EVENTUAL CONVERGENCE: New comers trigger restarts of existing participants,
        ensuring all nodes eventually participate in the same rendezvous round
 
-    4. RACE CONDITION TOLERANCE: The last_call_timeout provides a grace period
-       for restarting nodes, preventing premature completion
+    4. RACE CONDITION TOLERANCE: The previous-active last_call_timeout prevents
+       early hot spares from closing a restart round ahead of slower survivors.
 
     5. STALE ROUND DETECTION: Periodically checks if the local rendezvous round
        is behind the global cycle, allowing nodes to recover from desynchronization
@@ -465,6 +541,9 @@ class _RendezvousBarrierState:
         run_id: The run id of the rendezvous
         is_store_host: Whether this node is the TCPStore host
         join_timeout_seconds: Maximum time to wait for rendezvous completion
+        last_call_timeout_seconds: Restart-round grace window after enough
+            hot-spare candidates are available while previous active nodes are
+            still missing.
         segment: Number of nodes per domain for segment-aware rank assignment
         stale_check_interval: How often (in seconds) to check for stale rounds.
             Default is 10 seconds. Lower values increase store load but reduce
@@ -480,6 +559,7 @@ class _RendezvousBarrierState:
         run_id: str,
         is_store_host: bool = False,
         join_timeout_seconds: float = 600.0,
+        last_call_timeout_seconds: float = 15.0,
         segment: Optional[int] = None,
         stale_check_interval: float = 10.0,
     ):
@@ -487,6 +567,7 @@ class _RendezvousBarrierState:
         self.run_id = run_id
         self.is_store_host = is_store_host
         self.join_timeout_seconds = join_timeout_seconds
+        self.last_call_timeout_seconds = last_call_timeout_seconds
         self.segment = segment
         self.stale_check_interval = stale_check_interval
         self._rendezvous_start_time = None
@@ -528,6 +609,9 @@ class _RendezvousBarrierState:
         self.shutdown_key = f"{self.prefix}:shutdown"
         # Job-level unhealthy counter; persists across all rounds.
         self.unhealthy_count_key = f"{self.prefix}:unhealthy_count"
+        # Latest closed round's active membership. This is host-local by design:
+        # the barrier rendezvous currently has a single long-lived rendezvous host.
+        self._previous_active_infra_ranks: Optional[Set[int]] = None
 
         # Per-round open/close indicator. round_done_key value:
         #   0 = round is OPEN (accepting new participants)
@@ -769,6 +853,67 @@ class _RendezvousBarrierState:
 
         unhealthy_count_bytes = self.store.get(self.unhealthy_count_key)
         return int(unhealthy_count_bytes.decode('utf-8'))
+
+    def _remember_previous_active_infra_ranks(
+        self,
+        all_participants: List[Tuple[_NodeDesc, int, str]],
+        assigned_group_ranks: Dict[_NodeDesc, int],
+        world_size: int,
+    ) -> None:
+        """Remember active membership for restart-round close gating.
+
+        Infrastructure rank is the stable physical identity across launcher
+        restarts. If any active participant lacks one, the snapshot is treated as
+        unstable and the previous-active last-call gate will be disabled.
+        """
+        active_infra_ranks: Set[int] = set()
+        for node_desc, infra_rank, domain_id in all_participants:
+            if domain_id == WITHDRAWN:
+                continue
+            group_rank = assigned_group_ranks.get(node_desc)
+            if group_rank is None or group_rank >= world_size:
+                continue
+            if infra_rank < 0:
+                log.warning(
+                    "Previous active snapshot is not stable; disabling previous-active "
+                    "last-call wait until stable infrastructure ranks are available."
+                )
+                self._previous_active_infra_ranks = None
+                return
+            active_infra_ranks.add(infra_rank)
+
+        if len(active_infra_ranks) != world_size:
+            log.warning(
+                "Previous active snapshot has %s stable infra ranks for world_size=%s; "
+                "disabling previous-active last-call wait.",
+                len(active_infra_ranks),
+                world_size,
+            )
+            self._previous_active_infra_ranks = None
+            return
+
+        self._previous_active_infra_ranks = active_infra_ranks
+
+    def _make_previous_active_last_call_gate(
+        self,
+        min_nodes: int,
+        max_nodes: int,
+    ) -> _PreviousActiveLastCallGate:
+        enabled_by_config = (
+            self._round > 0 and max_nodes > min_nodes and self.last_call_timeout_seconds > 0.0
+        )
+        if not enabled_by_config:
+            return _PreviousActiveLastCallGate(
+                previous_active_infra_ranks=None,
+                timeout_seconds=self.last_call_timeout_seconds,
+                enabled=False,
+            )
+
+        return _PreviousActiveLastCallGate(
+            previous_active_infra_ranks=self._previous_active_infra_ranks,
+            timeout_seconds=self.last_call_timeout_seconds,
+            enabled=self._previous_active_infra_ranks is not None,
+        )
 
     def is_next_round_open(self) -> bool:
         """Return True if the next rendezvous round has been opened by any node in the cluster.
@@ -1129,6 +1274,8 @@ class _RendezvousBarrierState:
         # Track how long a count mismatch has persisted so we can escalate to WARNING
         # after a threshold and give actionable diagnostics before the join timeout fires.
         mismatch_first_seen: Optional[float] = None
+        close_gate = self._make_previous_active_last_call_gate(min_nodes, max_nodes)
+        last_call_logged_deadline: Optional[float] = None
 
         while True:
             if stop_event is not None and stop_event.is_set():
@@ -1233,6 +1380,33 @@ class _RendezvousBarrierState:
 
             if not constraint_satisfied:
                 continue
+
+            decision = close_gate.evaluate(active_participants, time.monotonic())
+            if not decision.should_close:
+                if decision.last_call_deadline != last_call_logged_deadline:
+                    last_call_logged_deadline = decision.last_call_deadline
+                    log.info(
+                        "[slot=%s] [Step 2] Enough participants are present, but "
+                        "waiting up to %.1fs for previous active infra ranks %s "
+                        "before accepting hot spares",
+                        self._slot,
+                        self.last_call_timeout_seconds,
+                        list(decision.missing_previous_active),
+                    )
+                else:
+                    log.debug(
+                        "[slot=%s] [Step 2] Waiting for previous active infra ranks %s",
+                        self._slot,
+                        list(decision.missing_previous_active),
+                    )
+                continue
+            if decision.missing_previous_active:
+                log.info(
+                    "[slot=%s] [Step 2] Previous-active last_call expired; "
+                    "closing round without infra ranks %s",
+                    self._slot,
+                    list(decision.missing_previous_active),
+                )
 
             log.info(
                 f"[slot={self._slot}] [Step 2] Constraint ok: {len(active_participants)} participants, "
@@ -1739,6 +1913,9 @@ class _RendezvousBarrierState:
                 rank_values.append(rank_value)
 
         self.store.multi_set(rank_keys, rank_values)
+        self._remember_previous_active_infra_ranks(
+            all_participants, assigned_group_ranks, world_size
+        )
 
     def is_shutdown(self) -> bool:
         """Check if rendezvous is permanently shut down (no further rounds)."""
@@ -1916,6 +2093,7 @@ class FtRendezvousBarrierHandler(RendezvousHandler):
             settings.run_id,
             is_store_host,
             settings.timeout.join.total_seconds(),
+            settings.timeout.last_call.total_seconds(),
             settings.segment,
             stale_check_interval=10.0,  # Check for stale rounds every 10 seconds
         )
@@ -2427,6 +2605,11 @@ def create_handler(
     |                            | rendezvous is expected to complete. Defaults to 600  |
     |                            | seconds.                                             |
     +----------------------------+------------------------------------------------------+
+    | last_call_timeout          | Restart-round grace period, in seconds, after enough |
+    |                            | hot-spare candidates are present while previous      |
+    |                            | active nodes are still missing. Defaults to 15       |
+    |                            | seconds. Only applies when max_nodes > min_nodes.    |
+    +----------------------------+------------------------------------------------------+
     | close_timeout              | The time, in seconds, within which the rendezvous is |
     |                            | expected to close after a call to                    |
     |                            | :py:meth:`RendezvousHandler.set_closed` or           |
@@ -2453,8 +2636,9 @@ def create_handler(
     """
     try:
         timeout = RendezvousTimeout(
-            _get_timeout(params, "join"),
-            _get_timeout(params, "close"),
+            join=_get_timeout(params, "join"),
+            last_call=_get_timeout(params, "last_call"),
+            close=_get_timeout(params, "close"),
         )
 
         # Get is_store_host from parameters

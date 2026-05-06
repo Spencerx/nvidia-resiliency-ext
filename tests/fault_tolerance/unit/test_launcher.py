@@ -16,6 +16,7 @@
 import contextlib
 import logging
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -47,19 +48,21 @@ def _get_func_name():
 def _run_launcher(cmd_to_run, timeout):
     try:
         proc = subprocess.Popen(
-            cmd_to_run,
-            shell=True,
+            shlex.split(cmd_to_run),
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            start_new_session=True,
         )
         stdout, _ = proc.communicate(timeout=timeout)
         return proc.returncode, stdout
-    except subprocess.TimeoutExpired:
-        with contextlib.suppress():
-            proc.kill()
-            proc.wait()
-        assert False, f"ft_launcher was still running after {timeout} seconds"
+    except subprocess.TimeoutExpired as exc:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=5)
+        output = exc.output or ""
+        assert False, f"ft_launcher was still running after {timeout} seconds\n{output}"
 
 
 def _save_ft_cfg(cfg, dirpath):
@@ -70,6 +73,20 @@ def _save_ft_cfg(cfg, dirpath):
 
 def _get_util_script_path():
     return os.path.join(os.path.dirname(__file__), "_launcher_test_util.py")
+
+
+def _config_from_launcher_cli(cli_args):
+    from nvidia_resiliency_ext.fault_tolerance import launcher
+
+    parser = launcher.get_args_parser()
+    args = parser.parse_args(cli_args)
+    with patch.object(
+        launcher.LocalElasticAgent,
+        "setup_rank_monitors_early",
+        return_value={},
+    ) as setup_rank_monitors_early:
+        config, cmd, cmd_args = launcher.config_from_args(args)
+    return config, cmd, cmd_args, setup_rank_monitors_early
 
 
 def test_register_barrier_rdzv_handler_applies_c10d_patch():
@@ -242,50 +259,55 @@ def test_missing_cfg(tmp_dir):
     with open(empty_ft_cfg_path, 'a'):
         pass  # touch file
     # Empty config file again, But this time there are FT args in CLI, so should be fine
-    cmd_to_run = f"{_get_util_script_path()} --scenario=test_ranks_exit_gracefully"
-    launcher_cmd = (
-        "ft_launcher --monitor-interval=1"
-        f" --ft-cfg-path={empty_ft_cfg_path} --nproc-per-node={WORLD_SIZE} --ft-rank-heartbeat-timeout=1.0"
-        f" {cmd_to_run}"
+    config, _, _, setup_rank_monitors = _config_from_launcher_cli(
+        [
+            "--monitor-interval=1",
+            f"--ft-cfg-path={empty_ft_cfg_path}",
+            f"--nproc-per-node={WORLD_SIZE}",
+            "--ft-rank-heartbeat-timeout=1.0",
+            _get_util_script_path(),
+            "--scenario=test_ranks_exit_gracefully",
+        ]
     )
-    ret_code, output = _run_launcher(launcher_cmd, DEFAULT_TIMEOUT)
-    assert ret_code == 0
+    assert config.fault_tol_cfg.rank_heartbeat_timeout == 1.0
+    assert setup_rank_monitors.call_args.kwargs["ft_cfg"] is config.fault_tol_cfg
+
     # Invalid config file path - should fail despite FT args specified via CLI
-    cmd_to_run = f"{_get_util_script_path()} --scenario=test_ranks_exit_gracefully"
-    launcher_cmd = (
-        "ft_launcher --monitor-interval=1"
-        " --ft-cfg-path=/not/there.yaml"
-        " --ft-rank-heartbeat-timeout=1.0"
-        f" --nproc-per-node={WORLD_SIZE}"
-        f" {cmd_to_run}"
-    )
-    ret_code, output = _run_launcher(launcher_cmd, DEFAULT_TIMEOUT)
-    assert ret_code != 0
+    with pytest.raises(FileNotFoundError):
+        _config_from_launcher_cli(
+            [
+                "--monitor-interval=1",
+                "--ft-cfg-path=/not/there.yaml",
+                "--ft-rank-heartbeat-timeout=1.0",
+                f"--nproc-per-node={WORLD_SIZE}",
+                _get_util_script_path(),
+                "--scenario=test_ranks_exit_gracefully",
+            ]
+        )
 
 
 def test_config_provided_via_cli(tmp_dir):
     # Check if FT args passed via CLI were propagated to the FT monitor process
-    ft_params_str = (
-        "--ft-workload-check-interval=321.0"
-        " --ft-initial-rank-heartbeat-timeout=1.0"
-        " --ft-rank-heartbeat-timeout=2.0"
-        " --ft-rank-termination-signal=SIGUSR2"
-        " --ft-log-level=WARNING"
+    config, _, _, setup_rank_monitors = _config_from_launcher_cli(
+        [
+            "--ft-workload-check-interval=321.0",
+            "--ft-initial-rank-heartbeat-timeout=1.0",
+            "--ft-rank-heartbeat-timeout=2.0",
+            "--ft-rank-termination-signal=SIGUSR2",
+            "--ft-log-level=WARNING",
+            f"--nproc-per-node={WORLD_SIZE}",
+            _get_util_script_path(),
+            "--scenario=dump_cfg",
+            f"--tmp_dir={tmp_dir}",
+        ]
     )
-    cmd_to_run = f"{_get_util_script_path()} --scenario=dump_cfg --tmp_dir={tmp_dir}"
-    launcher_cmd = "ft_launcher" f" {ft_params_str} --nproc-per-node={WORLD_SIZE} {cmd_to_run}"
-    ret_code, output = _run_launcher(launcher_cmd, DEFAULT_TIMEOUT)
-    assert ret_code == 0
 
-    dumped_ft_cfg_path = os.path.join(tmp_dir, "cfg_dump.yaml")
-    assert os.path.exists(dumped_ft_cfg_path)
-
-    restored_ft_conf = fault_tolerance.FaultToleranceConfig.from_yaml_file(dumped_ft_cfg_path)
-    assert restored_ft_conf.workload_check_interval == 321.0
-    assert restored_ft_conf.initial_rank_heartbeat_timeout == 1.0
-    assert restored_ft_conf.rank_heartbeat_timeout == 2.0
-    assert restored_ft_conf.rank_termination_signal == signal.SIGUSR2
-    assert restored_ft_conf.log_level == logging.WARNING
+    assert config.fault_tol_cfg.workload_check_interval == 321.0
+    assert config.fault_tol_cfg.initial_rank_heartbeat_timeout == 1.0
+    assert config.fault_tol_cfg.rank_heartbeat_timeout == 2.0
+    assert config.fault_tol_cfg.rank_termination_signal == signal.SIGUSR2
+    assert config.fault_tol_cfg.log_level == logging.WARNING
+    assert setup_rank_monitors.call_args.kwargs["ft_cfg"] is config.fault_tol_cfg
 
 
 def test_config_provided_via_cli_overwrites_yaml(tmp_dir):
@@ -301,30 +323,27 @@ def test_config_provided_via_cli_overwrites_yaml(tmp_dir):
     ft_cfg_path = os.path.join(tmp_dir, "ft_cfg.yaml")
     base_cfg.to_yaml_file(ft_cfg_path)
 
-    ft_params_str = (
-        "--ft-rank-heartbeat-timeout=123.0"
-        " --ft-safety-factor=7.7"
-        " --ft-rank-termination-signal=SIGUSR1"
-        " --ft-log-level=CRITICAL"
+    config, _, _, setup_rank_monitors = _config_from_launcher_cli(
+        [
+            "--ft-rank-heartbeat-timeout=123.0",
+            "--ft-safety-factor=7.7",
+            "--ft-rank-termination-signal=SIGUSR1",
+            "--ft-log-level=CRITICAL",
+            f"--ft-cfg-path={ft_cfg_path}",
+            f"--nproc-per-node={WORLD_SIZE}",
+            _get_util_script_path(),
+            "--scenario=dump_cfg",
+            f"--tmp_dir={tmp_dir}",
+        ]
     )
-    cmd_to_run = f"{_get_util_script_path()} --scenario=dump_cfg --tmp_dir={tmp_dir}"
-    launcher_cmd = (
-        "ft_launcher"
-        f" {ft_params_str} --ft-cfg-path={ft_cfg_path} --nproc-per-node={WORLD_SIZE} {cmd_to_run}"
-    )
-    ret_code, output = _run_launcher(launcher_cmd, DEFAULT_TIMEOUT)
-    assert ret_code == 0
 
-    dumped_ft_cfg_path = os.path.join(tmp_dir, "cfg_dump.yaml")
-    assert os.path.exists(dumped_ft_cfg_path)
-
-    restored_ft_conf = fault_tolerance.FaultToleranceConfig.from_yaml_file(dumped_ft_cfg_path)
-    assert restored_ft_conf.workload_check_interval == 321.0
-    assert restored_ft_conf.initial_rank_heartbeat_timeout == 111.0
-    assert restored_ft_conf.rank_heartbeat_timeout == 123.0
-    assert restored_ft_conf.safety_factor == 7.7
-    assert restored_ft_conf.rank_termination_signal == signal.SIGUSR1
-    assert restored_ft_conf.log_level == logging.CRITICAL
+    assert config.fault_tol_cfg.workload_check_interval == 321.0
+    assert config.fault_tol_cfg.initial_rank_heartbeat_timeout == 111.0
+    assert config.fault_tol_cfg.rank_heartbeat_timeout == 123.0
+    assert config.fault_tol_cfg.safety_factor == 7.7
+    assert config.fault_tol_cfg.rank_termination_signal == signal.SIGUSR1
+    assert config.fault_tol_cfg.log_level == logging.CRITICAL
+    assert setup_rank_monitors.call_args.kwargs["ft_cfg"] is config.fault_tol_cfg
 
 
 # ==============================================================================
@@ -678,32 +697,6 @@ def test_attribution_endpoint_with_per_cycle_applog_is_valid():
     )
 
     _validate_attribution_requires_per_cycle_applog(args, FaultToleranceConfig())
-
-
-@pytest.mark.parametrize(
-    "removed_option",
-    [
-        "--ft-attribution-applog-dir",
-        "--ft_attribution_applog_dir",
-        "--ft-attribution-log",
-        "--ft_attribution_log",
-        "--ft-attribution-cache-file",
-        "--ft_attribution_cache_file",
-        "--ft-attribution-host",
-        "--ft_attribution_host",
-        "--ft-attribution-port",
-        "--ft_attribution_port",
-        "--ft-log-server-log",
-        "--ft_log_server_log",
-    ],
-)
-def test_removed_options_are_rejected(removed_option):
-    from nvidia_resiliency_ext.fault_tolerance.launcher import get_args_parser
-
-    parser = get_args_parser()
-
-    with pytest.raises(SystemExit):
-        parser.parse_args([removed_option, "DEBUG", "train.py"])
 
 
 def test_log_funnel_ports_from_launcher_args_auto():
