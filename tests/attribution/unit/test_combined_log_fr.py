@@ -7,6 +7,11 @@ import sys
 import types
 
 from nvidia_resiliency_ext.attribution.base import AttributionState
+from nvidia_resiliency_ext.attribution.orchestration.types import (
+    AttributionRecommendation,
+    LogSageAnalysisResult,
+    RawAnalysisResultItem,
+)
 
 
 def _stub_module(monkeypatch, name):
@@ -211,6 +216,78 @@ def test_log_fr_mcp_path_state_ignores_fr_and_merge_stop_when_merge_enabled(monk
     assert payload["recommendation"] == {"action": "CONTINUE", "source": "log_analyzer"}
     assert payload["fr"]["state"] == "STOP"
     assert payload["llm_merged_summary"] == "List of ranks to be excluded: 1,2,3"
+
+
+def test_log_fr_mcp_path_merge_unwraps_logsage_result_for_llm(monkeypatch):
+    _import_combined_log_fr_with_optional_dependency_stubs(monkeypatch)
+    monkeypatch.delitem(
+        sys.modules,
+        "nvidia_resiliency_ext.attribution.combined_log_fr.combined_log_fr_mcp",
+        raising=False,
+    )
+    module = importlib.import_module(
+        "nvidia_resiliency_ext.attribution.combined_log_fr.combined_log_fr_mcp"
+    )
+
+    item = RawAnalysisResultItem(
+        raw_text="STOP - DONT RESTART IMMEDIATE\ncheckpoint was not saved",
+        auto_resume="STOP - DONT RESTART IMMEDIATE",
+        auto_resume_explanation="checkpoint was not saved",
+        attribution_text="Primary issues: [NCCL TIMEOUT], Secondary issues: []",
+        checkpoint_saved_flag=0,
+        action="STOP",
+        primary_issues=["NCCL TIMEOUT"],
+        secondary_issues=[],
+    )
+    logsage_result = LogSageAnalysisResult(
+        [item],
+        AttributionRecommendation(action="STOP", source="log_analyzer"),
+    )
+    captured = {}
+
+    class FakeLogAnalyzer:
+        def __init__(self, _kwargs):
+            pass
+
+        async def run(self, _kwargs):
+            return (logsage_result, AttributionState.STOP)
+
+    class FakeFRAnalyzer:
+        def __init__(self, _kwargs):
+            pass
+
+        async def run(self, _kwargs):
+            return (
+                {"analysis_text": "fr table", "hanging_ranks": "hanging ranks: [1, 2, 3]"},
+                AttributionState.CONTINUE,
+            )
+
+    class FakeCombinedLogFR:
+        def __init__(self, kwargs):
+            captured["init_log_input"] = kwargs["input_data"][0]
+
+        async def run(self, kwargs):
+            captured["run_log_input"] = kwargs["input_data"][0]
+            return ("merged", AttributionState.CONTINUE)
+
+    monkeypatch.setattr(module, "NVRxLogAnalyzer", FakeLogAnalyzer)
+    monkeypatch.setattr(module, "CollectiveAnalyzer", FakeFRAnalyzer)
+    monkeypatch.setattr(module, "CombinedLogFR", FakeCombinedLogFR)
+    monkeypatch.setattr(module, "fr_path_resolvable_for_collective_analyzer", lambda _path: True)
+
+    async def run():
+        orchestrator = module.CombinedLogFRMCPOrchestrator()
+        return await orchestrator._run_from_paths(
+            {"log_path": "/tmp/job.log", "fr_path": "/tmp/fr", "merge_llm": True}
+        )
+
+    payload, state = asyncio.run(run())
+
+    assert captured["init_log_input"] == [item]
+    assert captured["run_log_input"] == [item]
+    assert state == AttributionState.STOP
+    assert payload["result"] == [item.to_payload()]
+    assert payload["llm_merged_summary"] == "merged"
 
 
 def test_log_fr_mcp_skips_merge_when_fr_data_is_missing(monkeypatch):

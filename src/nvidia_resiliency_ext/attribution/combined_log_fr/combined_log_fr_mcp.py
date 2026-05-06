@@ -100,6 +100,15 @@ def _log_section_from_input_data(log_input: Any) -> dict[str, Any]:
     )
 
 
+def _log_input_for_merge(log_input: Any) -> Any:
+    """Return the LogSage value shape that ``merge_log_fr_llm`` renders as raw text."""
+    if isinstance(log_input, LogSageAnalysisResult):
+        return log_input.items
+    if isinstance(log_input, dict) and isinstance(log_input.get("result"), list):
+        return log_input["result"]
+    return log_input
+
+
 def _log_fr_result_payload(
     log_payload_section: dict[str, Any],
     fr_actual: Any,
@@ -147,7 +156,7 @@ async def _merge_log_fr_summary(
     but MCP callers must not treat merge output as stop/restart policy.
     """
     merge_kw: dict[str, Any] = {
-        "input_data": [log_actual, fr_actual],
+        "input_data": [_log_input_for_merge(log_actual), fr_actual],
         "threshold": int(arguments.get("threshold", 0)),
         **llm_kwargs,
     }
