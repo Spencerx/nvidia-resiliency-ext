@@ -18,23 +18,13 @@ from .config import (
     RESP_STATUS,
     RESP_WL_RESTART,
 )
-from .llm_output import attribution_recommendation
 from .types import (
-    RECOMMENDATION_CONTINUE,
-    RECOMMENDATION_RESTART,
     RECOMMENDATION_STOP,
     RECOMMENDATION_TIMEOUT,
-    RECOMMENDATION_UNKNOWN,
     AttributionRecommendation,
+    RawAnalysisResultItem,
 )
 
-_VALID_RECOMMENDATION_ACTIONS = {
-    RECOMMENDATION_STOP,
-    RECOMMENDATION_RESTART,
-    RECOMMENDATION_CONTINUE,
-    RECOMMENDATION_UNKNOWN,
-    RECOMMENDATION_TIMEOUT,
-}
 _SPLITLOG_MODE = "splitlog"
 
 
@@ -76,7 +66,7 @@ class AttrSvcResult:
             self.result.get(RESP_RESULT, "") if isinstance(self.result, dict) else ""
         )
         if isinstance(attribution_result, list):
-            text = " | ".join(str(item) for item in attribution_result)
+            text = " | ".join(_raw_result_item_preview(item) for item in attribution_result)
         else:
             text = str(attribution_result) if attribution_result else ""
         if len(text) > max_chars:
@@ -137,9 +127,9 @@ def parse_attrsvc_response(payload: Any, *, log_path: str | None = None) -> Attr
     body = payload if isinstance(payload, dict) else {}
     result = body.get(RESP_RESULT, payload)
     status = _string_value(body.get(RESP_STATUS)) or "completed"
-    recommendation = _standard_recommendation(body.get("recommendation"))
+    recommendation = AttributionRecommendation.from_payload(body.get("recommendation"))
     if recommendation is None:
-        recommendation = attribution_recommendation(result)
+        recommendation = AttributionRecommendation()
 
     return AttrSvcResult(
         result=result,
@@ -169,16 +159,8 @@ def _result_string(result: Any, key: str) -> str:
     return _string_value(result.get(key))
 
 
-def _standard_recommendation(payload: Any) -> AttributionRecommendation | None:
-    if not isinstance(payload, dict):
-        return None
-
-    action = _string_value(payload.get("action")).strip().upper()
-    if action not in _VALID_RECOMMENDATION_ACTIONS:
-        action = RECOMMENDATION_UNKNOWN
-
-    return AttributionRecommendation(
-        action=action,
-        reason=_string_value(payload.get("reason")),
-        source=_string_value(payload.get("source")),
-    )
+def _raw_result_item_preview(item: Any) -> str:
+    try:
+        return RawAnalysisResultItem.from_payload(item).raw_text
+    except (TypeError, ValueError):
+        return str(item)

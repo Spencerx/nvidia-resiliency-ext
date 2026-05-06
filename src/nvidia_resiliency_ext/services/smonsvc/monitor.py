@@ -16,7 +16,7 @@ from .job_handlers import fetch_results, submit_log
 from .models import JobState, MonitorState, SlurmJob, copy_tracking_fields
 from .slurm import SlurmClient, expand_slurm_patterns
 from .stats import format_stats_summary, get_health_status, get_jobs_list, get_stats_dict
-from .status_server import StatusServer
+from .status_server import DEFAULT_STATUS_HOST, StatusServer
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ class SlurmJobMonitor:
         job_pattern: str | None = None,
         timeout: float = DEFAULT_HTTP_TIMEOUT,
         port: int | None = None,
+        host: str = DEFAULT_STATUS_HOST,
     ):
         """
         Initialize the SLURM job monitor.
@@ -65,6 +66,7 @@ class SlurmJobMonitor:
             job_pattern: Regex pattern to match job names
             timeout: HTTP request timeout in seconds
             port: Port for HTTP server with stats/health/jobs endpoints (None to disable)
+            host: Host/interface for the HTTP status server
         """
         self.attrsvc_url = attrsvc_url.rstrip("/")
         self.poll_interval = poll_interval
@@ -120,6 +122,7 @@ class SlurmJobMonitor:
         self._state_lock = threading.Lock()
 
         # Status server
+        self._host = host
         self._port = port
         self._status_server: StatusServer | None = None
 
@@ -158,6 +161,7 @@ class SlurmJobMonitor:
             return
 
         self._status_server = StatusServer(
+            host=self._host,
             port=self._port,
             get_stats=self._get_stats_for_http,
             get_jobs=self._get_jobs_for_http,

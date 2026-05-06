@@ -28,6 +28,18 @@ from nvidia_resiliency_ext.shared_utils.health_check import (
 )
 
 
+def _attribution_item(raw_text, reason_code):
+    return {
+        "raw_text": raw_text,
+        "auto_resume": raw_text.split("\n", 1)[0],
+        "auto_resume_explanation": "",
+        "attribution_text": "",
+        "checkpoint_saved_flag": 0,
+        "primary_issues": [],
+        "secondary_issues": [],
+    }
+
+
 class TestPynvmlMixin(unittest.TestCase):
 
     @patch("nvidia_resiliency_ext.shared_utils.health_check.pynvml", create=True)
@@ -590,7 +602,7 @@ class TestAttributionService(unittest.TestCase):
                 "module": "log_analyzer",
                 "result_id": "abc123",
                 "resource_uri": "attribution://log_analyzer/abc123",
-                "result": ["raw attribution item"],
+                "result": [_attribution_item("raw attribution item", "UNKNOWN")],
             },
             "status": "completed",
         }
@@ -614,10 +626,14 @@ class TestAttributionService(unittest.TestCase):
         response.status_code = 200
         response.text = "{}"
         response.json.return_value = {
+            "recommendation": {
+                "action": "RESTART",
+                "reason": "RESTART IMMEDIATE",
+                "source": "log_analyzer",
+            },
             "result": {
                 "module": "log_analyzer",
-                "state": "CONTINUE",
-                "result": ["RESTART IMMEDIATE"],
+                "result": [_attribution_item("RESTART IMMEDIATE", "RESTART_IMMEDIATE")],
             },
             "status": "completed",
         }
@@ -642,7 +658,7 @@ class TestAttributionService(unittest.TestCase):
             },
             "result": {
                 "module": "log_analyzer",
-                "result": ["ERRORS NOT FOUND"],
+                "result": [_attribution_item("ERRORS NOT FOUND", "NO_ERRORS")],
             },
             "status": "completed",
         }

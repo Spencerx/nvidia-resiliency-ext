@@ -38,13 +38,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../scripts/common.sh"
 
 # Configuration (can be overridden via env vars)
+export NVRX_ATTRSVC_HOST="${NVRX_ATTRSVC_HOST:-0.0.0.0}"
 export NVRX_ATTRSVC_PORT="${NVRX_ATTRSVC_PORT:-8000}"
 
 # Validate required environment
 validate_attrsvc_allowed_root || exit 1
 
-# nvdataflow configuration
-export NVRX_ATTRSVC_NVDATAFLOW_PROJECT="${NVRX_ATTRSVC_NVDATAFLOW_PROJECT:-}"
 export NVRX_ATTRSVC_CLUSTER_NAME="${NVRX_ATTRSVC_CLUSTER_NAME:-${SLURM_CLUSTER_NAME:-unknown}}"
 
 # Setup API key

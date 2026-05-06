@@ -20,12 +20,16 @@ Compute timeout defaults live on :class:`~nvidia_resiliency_ext.attribution.coal
 import os
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Mapping
 
 # LLM defaults — override with NVRX_LLM_MODEL / NVRX_LLM_BASE_URL env vars.
 # Default endpoint is build.nvidia.com (publicly accessible).
 # Internal NVIDIA users can override to inference.nvidia.com via NVRX_LLM_BASE_URL.
 DEFAULT_LLM_MODEL = os.environ.get("NVRX_LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b")
 DEFAULT_LLM_BASE_URL = os.environ.get("NVRX_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+DEFAULT_LLM_TEMPERATURE = 0.2
+DEFAULT_LLM_TOP_P = 0.7
+DEFAULT_LLM_MAX_TOKENS = 8192
 
 # TTL constants (see spec Section 3.2)
 TTL_PENDING_SECONDS = 7 * 24 * 60 * 60  # 1 week - pending job expiry
@@ -42,10 +46,12 @@ MIN_FILE_SIZE_KB = 4  # Minimum file size (KB) for classification
 
 @dataclass
 class LogSageExecutionConfig:
-    """Lib/MCP runtime knobs for :class:`~nvidia_resiliency_ext.attribution.orchestration.log_analyzer.LogAnalyzer`.
+    """Lib/MCP runtime override knobs for :class:`~nvidia_resiliency_ext.attribution.orchestration.log_analyzer.LogAnalyzer`.
 
     ``use_lib_log_analysis`` selects **both** LogSage and flight-recorder analysis: in-process vs the
     same MCP subprocess used for ``log_analyzer`` / ``fr_analyzer`` tools.
+    LLM fields are optional overrides; ``None`` means orchestration omits the key so the lower
+    LogSage/MCP/merge layer applies its own default.
 
     Subset of orchestration :class:`~nvidia_resiliency_ext.attribution.orchestration.types.LogAnalyzerConfig`
     (no ``allowed_root`` — path policy stays in the attribution :class:`~nvidia_resiliency_ext.attribution.analyzer.engine.Analyzer`).
@@ -54,11 +60,83 @@ class LogSageExecutionConfig:
     use_lib_log_analysis: bool = False
     #: Subprocess MCP server (:func:`~nvidia_resiliency_ext.attribution.mcp_integration.mcp_client.get_server_command`).
     mcp_server_log_level: str = "INFO"
-    llm_model: str = DEFAULT_LLM_MODEL
-    llm_base_url: str = DEFAULT_LLM_BASE_URL
-    llm_temperature: float = 0.0
-    llm_top_p: float = 1.0
-    llm_max_tokens: int = 8192
+    llm_model: str | None = None
+    llm_base_url: str | None = None
+    llm_temperature: float | None = None
+    llm_top_p: float | None = None
+    llm_max_tokens: int | None = None
+
+    def llm_runtime_overrides(self) -> dict[str, Any]:
+        """LLM kwargs for LogSage/MCP/runtime calls, omitting unset overrides."""
+        return llm_runtime_overrides(
+            model=self.llm_model,
+            base_url=self.llm_base_url,
+            temperature=self.llm_temperature,
+            top_p=self.llm_top_p,
+            max_tokens=self.llm_max_tokens,
+        )
+
+    def llm_endpoint_overrides(self) -> dict[str, Any]:
+        """Endpoint-only LLM kwargs for callers that do not consume sampling settings."""
+        return drop_none_values(
+            {
+                "model": self.llm_model,
+                "base_url": self.llm_base_url,
+            }
+        )
+
+    def pipeline_llm_overrides(self) -> dict[str, Any]:
+        """LLM override kwargs for :func:`run_attribution_pipeline`."""
+        return drop_none_values(
+            {
+                "llm_model": self.llm_model,
+                "llm_base_url": self.llm_base_url,
+                "llm_temperature": self.llm_temperature,
+                "llm_top_p": self.llm_top_p,
+                "llm_max_tokens": self.llm_max_tokens,
+            }
+        )
+
+
+def drop_none_values(values: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy without ``None`` values, preserving falsy overrides like ``0``."""
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def llm_runtime_overrides(
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    """Runtime LLM kwargs with only explicitly supplied overrides."""
+    return drop_none_values(
+        {
+            "model": model,
+            "base_url": base_url,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+        }
+    )
+
+
+def _value_or_default(values: Mapping[str, Any], key: str, default: Any) -> Any:
+    value = values.get(key)
+    return default if value is None else value
+
+
+def resolved_llm_runtime_kwargs(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Runtime LLM kwargs with lower-layer defaults applied."""
+    return {
+        "model": _value_or_default(values, "model", DEFAULT_LLM_MODEL),
+        "base_url": _value_or_default(values, "base_url", DEFAULT_LLM_BASE_URL),
+        "temperature": float(_value_or_default(values, "temperature", DEFAULT_LLM_TEMPERATURE)),
+        "top_p": float(_value_or_default(values, "top_p", DEFAULT_LLM_TOP_P)),
+        "max_tokens": int(_value_or_default(values, "max_tokens", DEFAULT_LLM_MAX_TOKENS)),
+    }
 
 
 # Result/response keys (serialized shape of orchestration results; see svc.types)
@@ -77,7 +155,12 @@ RESP_MODULE = "module"
 RESP_STATE = "state"
 RESP_ERROR = "error"
 RESP_RESULT_ID = "result_id"
+# Inner result RESP_MODULE values
+MODULE_LOG_ANALYZER = "log_analyzer"
+MODULE_LOG_FR_ANALYZER = "log_fr_analyzer"
+MODULE_FR_ONLY = "fr_only"
 # Inner result RESP_STATE values
+STATE_NO_LOG = "no_log"
 STATE_TIMEOUT = "timeout"
 
 # Stats / job detail keys (get_stats, get_jobs_detail, get_all_jobs response shape)

@@ -18,12 +18,10 @@ Modes:
 - **LOG_ONLY** — LogSage only (no FR discovery or trace analysis).
 - **TRACE_ONLY** — NCCL flight-recorder analysis only (no LogSage); requires a dump path from
   discovery or ``fr_dump_path_override``.
-- **LOG_AND_TRACE** — LogSage plus FR when a dump path is found. Lib: both run in parallel via
-  :func:`asyncio.gather` (no merge LLM). MCP: single ``log_fr_analyzer`` tool runs log + FR in
-  parallel and runs the merge LLM inside the MCP process; host receives ``llm_merged_summary``.
-- **LOG_AND_TRACE_WITH_LLM** — Lib: **LOG_AND_TRACE** then host :func:`merge_log_fr_llm`. MCP: same
-  ``log_fr_analyzer`` tool as **LOG_AND_TRACE** (merge already in MCP); host merge is skipped when
-  ``llm_merged_summary`` is already set.
+- **LOG_AND_TRACE** — LogSage plus FR when a dump path is found. No merge LLM.
+- **LOG_AND_TRACE_WITH_LLM** — LogSage plus FR and merge LLM. Lib runs the merge on the host; MCP
+  may use ``log_fr_analyzer`` to run log + FR + merge in the MCP process. If FR is missing/skipped,
+  no merge LLM runs.
 """
 
 from __future__ import annotations
@@ -40,6 +38,8 @@ from nvidia_resiliency_ext.attribution.trace_analyzer.fr_support import (
     analyze_fr_dump,
     extract_fr_dump_path,
 )
+
+from .config import llm_runtime_overrides
 
 
 class FrDumpPathNotFoundError(Exception):
@@ -72,6 +72,7 @@ class CombinedAnalysisResult:
     fr_dump_path: Optional[str]
     fr_analysis: Optional[FRAnalysisResult]
     processing_time: float
+    analysis_completed_at_ms: int
     llm_merged_summary: Optional[str] = None
 
 
@@ -91,9 +92,9 @@ async def run_attribution_pipeline(
     fr_dump_path_override: Optional[str] = None,
     llm_model: Optional[str] = None,
     llm_base_url: Optional[str] = None,
-    llm_temperature: float = 0.2,
-    llm_top_p: float = 0.7,
-    llm_max_tokens: int = 16384,
+    llm_temperature: Optional[float] = None,
+    llm_top_p: Optional[float] = None,
+    llm_max_tokens: Optional[int] = None,
     llm_api_key: Optional[str] = None,
 ) -> CombinedAnalysisResult:
     """Run attribution according to ``mode``.
@@ -101,18 +102,19 @@ async def run_attribution_pipeline(
     Args:
         log_path: Path to the job log (for FR discovery when applicable).
         mode: :class:`AnalysisPipelineMode` selector.
-        run_logsage: Async factory for the LogSage ``{"result": ..., "state": ...}`` dict. Required
-            for modes that run LogSage (not **TRACE_ONLY**).
+        run_logsage: Async factory for the LogSage ``{"result": ..., "recommendation": ...}``
+            dict. Required for modes that run LogSage (not **TRACE_ONLY**).
         discover_fr_dump_path: Override FR path scan; default uses ``extract_fr_dump_path``.
         run_fr_analysis: Override FR runner; default is :func:`analyze_fr_dump`.
-        run_log_fr_analyzer_mcp: When set and a dump path exists, called as
+        run_log_fr_analyzer_mcp: Optional combined MCP runner. When set and a dump path exists,
+            called as
             ``await run_log_fr_analyzer_mcp(log_path, fr_dump_path)`` returning
-            ``(log_result, fr_analysis, llm_merged_summary)`` from MCP tool ``log_fr_analyzer`` (log + FR
-            in parallel and merge LLM inside the MCP process).
+            ``(log_result, fr_analysis, llm_merged_summary)`` from MCP tool ``log_fr_analyzer``.
+            The callback decides whether to run merge LLM based on this pipeline's mode.
         fr_dump_path_override: Explicit dump path for **TRACE_ONLY** (skips discovery when set).
-        llm_model: Model id for **LOG_AND_TRACE_WITH_LLM** (required when that mode runs the merge).
-        llm_base_url: Base url for **LOG_AND_TRACE_WITH_LLM** (required when that mode runs the merge).
-        llm_temperature / llm_top_p / llm_max_tokens: Passed to the merge LLM when applicable.
+        llm_model / llm_base_url / llm_temperature / llm_top_p / llm_max_tokens:
+            Optional overrides passed to the merge LLM when applicable. ``None`` means the merge
+            layer applies its default.
         llm_api_key: LLM API key for **LOG_AND_TRACE_WITH_LLM** host merge when MCP did not
             merge. If ``None``, resolved once per pipeline run via :func:`load_llm_api_key`.
     """
@@ -120,15 +122,31 @@ async def run_attribution_pipeline(
     run_fr = run_fr_analysis or analyze_fr_dump
     t0 = time.time()
 
+    def _result(
+        *,
+        log_result: Optional[Dict[str, Any]],
+        fr_dump_path: Optional[str],
+        fr_analysis: Optional[FRAnalysisResult],
+        llm_merged_summary: Optional[str] = None,
+    ) -> CombinedAnalysisResult:
+        completed_at = time.time()
+        return CombinedAnalysisResult(
+            log_result=log_result,
+            fr_dump_path=fr_dump_path,
+            fr_analysis=fr_analysis,
+            processing_time=completed_at - t0,
+            analysis_completed_at_ms=round(completed_at * 1000),
+            llm_merged_summary=llm_merged_summary,
+        )
+
     if mode == AnalysisPipelineMode.LOG_ONLY:
         if run_logsage is None:
             raise ValueError("run_logsage is required for LOG_ONLY mode")
         log_result = await run_logsage()
-        return CombinedAnalysisResult(
+        return _result(
             log_result=log_result,
             fr_dump_path=None,
             fr_analysis=None,
-            processing_time=time.time() - t0,
             llm_merged_summary=None,
         )
 
@@ -137,11 +155,10 @@ async def run_attribution_pipeline(
         if not fr_dump_path:
             raise FrDumpPathNotFoundError()
         fr_analysis = await run_fr(fr_dump_path)
-        return CombinedAnalysisResult(
+        return _result(
             log_result=None,
             fr_dump_path=fr_dump_path,
             fr_analysis=fr_analysis,
-            processing_time=time.time() - t0,
             llm_merged_summary=None,
         )
 
@@ -155,6 +172,8 @@ async def run_attribution_pipeline(
             log_result, fr_analysis, llm_merged_summary = await run_log_fr_analyzer_mcp(
                 log_path, fr_dump_path
             )
+            if mode != AnalysisPipelineMode.LOG_AND_TRACE_WITH_LLM:
+                llm_merged_summary = None
         else:
             log_result, fr_analysis = await asyncio.gather(
                 run_logsage(),
@@ -170,10 +189,6 @@ async def run_attribution_pipeline(
         and log_result is not None
         and fr_analysis is not None
     ):
-        if not llm_model:
-            raise ValueError("llm_model is required for LOG_AND_TRACE_WITH_LLM when merging")
-        if not llm_base_url:
-            raise ValueError("llm_base_url is required for LOG_AND_TRACE_WITH_LLM when merging")
         from nvidia_resiliency_ext.attribution.combined_log_fr.llm_merge import merge_log_fr_llm
 
         merge_key = llm_api_key if llm_api_key is not None else load_llm_api_key()
@@ -181,17 +196,18 @@ async def run_attribution_pipeline(
             log_result,
             fr_analysis,
             llm_api_key=merge_key,
-            model=llm_model,
-            base_url=llm_base_url,
-            temperature=llm_temperature,
-            top_p=llm_top_p,
-            max_tokens=llm_max_tokens,
+            **llm_runtime_overrides(
+                model=llm_model,
+                base_url=llm_base_url,
+                temperature=llm_temperature,
+                top_p=llm_top_p,
+                max_tokens=llm_max_tokens,
+            ),
         )
 
-    return CombinedAnalysisResult(
+    return _result(
         log_result=log_result,
         fr_dump_path=fr_dump_path,
         fr_analysis=fr_analysis,
-        processing_time=time.time() - t0,
         llm_merged_summary=llm_merged_summary,
     )

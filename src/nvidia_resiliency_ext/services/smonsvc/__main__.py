@@ -15,6 +15,7 @@ import logging
 import os
 
 from .monitor import SlurmJobMonitor
+from .status_server import DEFAULT_STATUS_HOST
 
 # Configure logging (read level from env, default to INFO)
 _log_level_name = os.environ.get("NVRX_SMONSVC_LOG_LEVEL", "INFO").upper()
@@ -107,6 +108,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--host",
+        default=os.environ.get("NVRX_SMONSVC_HOST", DEFAULT_STATUS_HOST),
+        help=(
+            "Host/interface for HTTP status server "
+            f"(env: NVRX_SMONSVC_HOST, default: {DEFAULT_STATUS_HOST})"
+        ),
+    )
+
+    parser.add_argument(
         "--port",
         type=int,
         default=(
@@ -143,6 +153,7 @@ Examples:
         job_pattern=args.job_pattern,
         timeout=args.timeout,
         port=args.port,
+        host=args.host,
     ) as monitor:
         monitor.run()
 

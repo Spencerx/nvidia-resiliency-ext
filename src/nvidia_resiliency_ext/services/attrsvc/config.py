@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import unquote, urlparse
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Re-export ErrorCode from library layer so service consumers can use:
@@ -31,7 +31,7 @@ from nvidia_resiliency_ext.attribution.orchestration.config import ErrorCode as 
 logger = logging.getLogger(__name__)
 
 # Service-specific constants
-DEFAULT_HOST = "0.0.0.0"
+DEFAULT_HOST = "127.0.0.1"
 
 DEFAULT_PORT = 8000
 PRINT_PREVIEW_MAX_BYTES = 4096  # Max bytes to return for /print endpoint
@@ -109,6 +109,13 @@ def parse_service_endpoint(
     return ServiceEndpoint(host=host, port=port)
 
 
+def _normalize_optional_override(value: object) -> object:
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return value
+
+
 class Settings(BaseSettings):
     """Typed configuration loaded from environment/.env (pydantic-settings v2).
 
@@ -118,7 +125,7 @@ class Settings(BaseSettings):
 
     ``LOG_LEVEL`` sets the root log level, FastAPI ``debug`` (when ``LOG_LEVEL`` is ``DEBUG``), MCP
     subprocess ``--log-level``, and verbosity for in-process MCP client loggers. Allowed values:
-    ``DEBUG``, ``INFO``, ``WARNING`` (default ``INFO``). Legacy env: ``NVRX_ATTRSVC_LOG_LEVEL_NAME``.
+    ``DEBUG``, ``INFO``, ``WARNING`` (default ``INFO``).
     """
 
     FAST_API_ROOT_PATH: str = Field(default="", description="FastAPI root path")
@@ -140,15 +147,14 @@ class Settings(BaseSettings):
             "Service log level: DEBUG, INFO, or WARNING. Drives logging.basicConfig, MCP "
             "``nvrx-mcp-analysis --log-level``, and FastAPI debug when set to DEBUG."
         ),
-        validation_alias=AliasChoices("log_level", "log_level_name"),
     )
     COMPUTE_TIMEOUT: float | None = Field(
         default=None, description="Timeout for compute_fn in seconds (None = library default)"
     )
 
     # LLM settings -> AttributionControllerConfig when set (see AttributionHttpAdapter)
-    LLM_MODEL: str | None = Field(default=DEFAULT_LLM_MODEL, description="LLM model identifier")
-    LLM_BASE_URL: str | None = Field(default=DEFAULT_LLM_BASE_URL, description="LLM base url")
+    LLM_MODEL: str | None = Field(default=None, description="LLM model override")
+    LLM_BASE_URL: str | None = Field(default=None, description="LLM base url override")
     LLM_TEMPERATURE: float | None = Field(
         default=None, description="LLM temperature (0.0 = deterministic)"
     )
@@ -162,13 +168,9 @@ class Settings(BaseSettings):
             "How to run LogSage and flight-recorder analysis: "
             "'mcp' (subprocess MCP, default) or 'lib' (in-process)."
         ),
-        validation_alias=AliasChoices("analysis_backend", "log_analysis_backend"),
     )
 
     CLUSTER_NAME: str = Field(default="", description="Cluster name for dataflow")
-    DATAFLOW_INDEX: str = Field(
-        default="", description="Dataflow/elasticsearch index for posting results"
-    )
 
     # Slack integration (optional; env vars have no NVRX_ATTRSVC_ prefix)
     SLACK_BOT_TOKEN: str = Field(
@@ -259,6 +261,18 @@ class Settings(BaseSettings):
         if v is not None and v <= 0:
             raise ValueError(f"COMPUTE_TIMEOUT must be positive, got {v}")
         return v
+
+    @field_validator(
+        "LLM_MODEL",
+        "LLM_BASE_URL",
+        "LLM_TEMPERATURE",
+        "LLM_TOP_P",
+        "LLM_MAX_TOKENS",
+        mode="before",
+    )
+    @classmethod
+    def normalize_llm_override(cls, v: object) -> object:
+        return _normalize_optional_override(v)
 
     @field_validator("LLM_TEMPERATURE")
     @classmethod

@@ -42,6 +42,7 @@ source "${SCRIPT_DIR}/../../scripts/common.sh"
 
 # Configuration (can be overridden via env vars)
 export NVRX_ATTRSVC_ENDPOINT="${NVRX_ATTRSVC_ENDPOINT:-http://localhost:8000}"
+export NVRX_SMONSVC_HOST="${NVRX_SMONSVC_HOST:-0.0.0.0}"
 export NVRX_SMONSVC_PORT="${NVRX_SMONSVC_PORT:-8100}"
 export NVRX_SMONSVC_PARTITIONS="${NVRX_SMONSVC_PARTITIONS:-batch batch_long}"
 export NVRX_SMONSVC_INTERVAL="${NVRX_SMONSVC_INTERVAL:-180}"
