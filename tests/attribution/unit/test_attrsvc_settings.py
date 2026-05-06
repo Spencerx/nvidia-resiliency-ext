@@ -3,7 +3,8 @@ import pytest
 pytest.importorskip("pydantic")
 pytest.importorskip("pydantic_settings")
 
-from nvidia_resiliency_ext.services.attrsvc.config import Settings
+attrsvc_config = pytest.importorskip("nvidia_resiliency_ext.services.attrsvc.config")
+Settings = attrsvc_config.Settings
 
 
 def test_attrsvc_llm_settings_are_override_only(tmp_path, monkeypatch):

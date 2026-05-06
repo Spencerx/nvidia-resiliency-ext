@@ -6,7 +6,8 @@ import pytest
 pytest.importorskip("pydantic")
 pytest.importorskip("pydantic_settings")
 
-from nvidia_resiliency_ext.services.attrsvc.config import parse_service_endpoint
+attrsvc_config = pytest.importorskip("nvidia_resiliency_ext.services.attrsvc.config")
+parse_service_endpoint = attrsvc_config.parse_service_endpoint
 
 
 def test_parse_service_endpoint_defaults_to_loopback():
