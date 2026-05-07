@@ -12,6 +12,8 @@ from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_STATUS_HOST = "127.0.0.1"
+
 
 def create_status_handler(
     get_stats: Callable[[], dict],
@@ -108,6 +110,7 @@ class StatusServer:
         get_stats: Callable[[], dict],
         get_jobs: Callable[[], list],
         get_health: Callable[[], tuple],
+        host: str = DEFAULT_STATUS_HOST,
     ):
         """
         Initialize the status server.
@@ -117,7 +120,9 @@ class StatusServer:
             get_stats: Callback to get monitor statistics dict
             get_jobs: Callback to get list of job dicts
             get_health: Callback returning (is_healthy: bool, details: dict)
+            host: Host/interface to bind the status server to
         """
+        self._host = host
         self._port = port
         self._get_stats = get_stats
         self._get_jobs = get_jobs
@@ -133,9 +138,9 @@ class StatusServer:
             self._get_health,
         )
         try:
-            self._server = HTTPServer(("0.0.0.0", self._port), handler_class)
+            self._server = HTTPServer((self._host, self._port), handler_class)
         except OSError as e:
-            logger.error(f"Failed to bind status server to port {self._port}: {e}")
+            logger.error(f"Failed to bind status server to {self._host}:{self._port}: {e}")
             raise SystemExit(1) from e
 
         self._thread = threading.Thread(
@@ -144,7 +149,7 @@ class StatusServer:
             name="status-server",
         )
         self._thread.start()
-        logger.info(f"  Status server: http://0.0.0.0:{self._port}")
+        logger.info(f"  Status server: http://{self._host}:{self._port}")
 
     def stop(self) -> None:
         """Stop the HTTP server."""

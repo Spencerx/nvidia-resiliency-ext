@@ -35,12 +35,16 @@ Environment variables (prefix: `NVRX_ATTRSVC_`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `FAST_API_ROOT_PATH` | `""` | FastAPI root path when serving behind a path-prefixing proxy |
 | `ALLOWED_ROOT` | (required) | Base directory for allowed log paths |
-| `HOST` | `0.0.0.0` | Listen address |
+| `ENDPOINT` | `""` | Unified bind endpoint. Supports `http://host:port`, `host:port`, `unix:///absolute/path.sock`, or an absolute socket path. Overrides `HOST`/`PORT`. |
+| `HOST` | `127.0.0.1` | Listen address. Deployments that need remote access should set `NVRX_ATTRSVC_HOST=0.0.0.0` explicitly. |
 | `PORT` | `8000` | Listen port |
-| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, or `WARNING` for root logging and MCP; FastAPI `debug` when set to `DEBUG`. Legacy env: `LOG_LEVEL_NAME`. |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, or `WARNING` for root logging and MCP; FastAPI `debug` when set to `DEBUG`. |
 | `CLUSTER_NAME` | `""` | Cluster name for dataflow posting |
-| `DATAFLOW_INDEX` | `""` | Elasticsearch index for result posting |
+| `DATAFLOW_HTTP_URL` | `""` | Complete dataflow HTTP posting URI. Empty disables dataflow posting. |
+| `DATAFLOW_QUEUE` | `""` | Optional queue parameter for dataflow HTTP posting |
+| `DATAFLOW_TIMEOUT_SECONDS` | `10.0` | Dataflow HTTP request timeout |
 | `RATE_LIMIT_SUBMIT` | `1200/minute` | Rate limit for POST /logs |
 | `RATE_LIMIT_ANALYZE` | `60/minute` | Rate limit for GET /logs |
 | `RATE_LIMIT_PREVIEW` | `120/minute` | Rate limit for GET /print |
@@ -49,13 +53,13 @@ Environment variables (prefix: `NVRX_ATTRSVC_`):
 
 | Variable (with prefix)          | Description                                                                                                                                                                                                   |
 |---------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `NVRX_ATTRSVC_LLM_MODEL`        | LLM model identifier                                                                                                                                                                                          |
-| `NVRX_ATTRSVC_LLM_BASE_URL`     | LLM base url                                                                                                                                                                                                  |
+| `NVRX_ATTRSVC_LLM_MODEL`        | Optional LLM model override                                                                                                                                                                                   |
+| `NVRX_ATTRSVC_LLM_BASE_URL`     | Optional LLM base URL override                                                                                                                                                                                |
 | `NVRX_ATTRSVC_LLM_TEMPERATURE`  | Temperature (0.0 = deterministic)                                                                                                                                                                             |
 | `NVRX_ATTRSVC_LLM_TOP_P`        | Top-p for nucleus sampling                                                                                                                                                                                    |
 | `NVRX_ATTRSVC_LLM_MAX_TOKENS`   | Max tokens for response                                                                                                                                                                                       |
 | `NVRX_ATTRSVC_COMPUTE_TIMEOUT`  | Timeout for analysis in seconds                                                                                                                                                                               |
-| `NVRX_ATTRSVC_ANALYSIS_BACKEND` | `mcp` (subprocess MCP, default) or `lib` (in-process LogSage and flight-recorder analysis). Same setting for both; library behavior: **ARCHITECTURE.md §7**. Legacy env: `NVRX_ATTRSVC_LOG_ANALYSIS_BACKEND`. |
+| `NVRX_ATTRSVC_ANALYSIS_BACKEND` | `mcp` (subprocess MCP, default) or `lib` (in-process LogSage and flight-recorder analysis). Same setting for both; library behavior: **ARCHITECTURE.md §7**. |
 
 **LLM API Key** (required, checked in order — see `api_keys.load_llm_api_key`):
 1. `LLM_API_KEY` environment variable
@@ -71,7 +75,7 @@ Environment variables (prefix: `NVRX_ATTRSVC_`):
 | `SLACK_BOT_TOKEN_FILE` | — | Path to a file containing the token (checked before `~/.slack_bot_token` / `~/.slack_token`) |
 | `SLACK_CHANNEL` | `""` | Channel ID or name (e.g. `#trng-alerts`). In `.env`, quote values that start with `#`: `SLACK_CHANNEL="#trng-alerts"` |
 
-When configured, sends alerts to Slack for jobs with `auto_resume = "STOP - DONT RESTART IMMEDIATE"`.
+When configured, sends alerts to Slack for results whose normalized `recommendation.action` is `STOP`.
 
 **Processed Files Ledger** (optional cache persistence):
 
@@ -81,10 +85,10 @@ When configured, sends alerts to Slack for jobs with `auto_resume = "STOP - DONT
 | `CACHE_GRACE_PERIOD_SECONDS` | `600` | Grace period before validating file on cache hit (10 min) |
 
 The cache acts as a **processed files ledger** - tracking which files have been analyzed
-and posted to Elasticsearch. This prevents duplicate processing after service restarts.
+and posted to the configured dataflow HTTP endpoint. This prevents duplicate processing after service restarts.
 
 **Why needed:** When the service restarts, smonsvc resubmits recently completed jobs.
-Without the ledger, all files would be re-analyzed and re-posted to ES. The ledger
+Without the ledger, all files would be re-analyzed and re-posted. The ledger
 allows the service to recognize "I've already processed this file" and skip it.
 
 **What's stored:** `(path, mtime, size, result)` for each processed file.
@@ -183,7 +187,6 @@ All success responses use HTTP 200. Interpret outcome from the response body onl
 | Field | Type | Description |
 |-------|------|-------------|
 | `action` | string | One of `"STOP"` \| `"RESTART"` \| `"CONTINUE"` \| `"UNKNOWN"` \| `"TIMEOUT"`. |
-| `reason` | string | Human-readable summary or backend reason. |
 | `source` | string | Backend/module that produced the recommendation, e.g. `"log_analyzer"`. |
 
 `"STOP"` means the client should not restart immediately. `"RESTART"` means
@@ -195,22 +198,33 @@ signals.
 
 | Field | Type | When | Description |
 |-------|------|------|-------------|
-| `module` | string | Always | e.g. `"log_analyzer"`. |
-| `state` | string | Always | Raw backend state, e.g. `"timeout"` \| `"CONTINUE"` \| `"STOP"`. |
-| `result` | array | Always | Attribution items (one per cycle). Empty when `state === "timeout"`. |
+| `module` | string | Always | e.g. `"log_analyzer"`, `"log_fr_analyzer"`, or `"fr_analyzer"`. |
+| `result` | array \| object | Always | LogSage attribution items, or FR monitor output for `fr_analyzer`. Empty for timeout/error markers. |
+| `recommendation` | object | Always | Compact decision contract: `action` and `source`. |
+| `state` | string | Timeout/error only | Execution marker such as `"timeout"`; normal LogSage success results omit this. |
 | `error` | string | When `state === "timeout"` | Human-readable timeout message. |
 
-Other fields (e.g. `result_id`, `resource_uri`) may be present.
+Each attribution item carries the exact `raw_text` and the parsed LogSage fields
+used by postprocessing: `auto_resume`, `auto_resume_explanation`,
+`attribution_text`, `checkpoint_saved_flag`, `primary_issues`, and
+`secondary_issues`. Each item also carries the parsed cycle `action`; the
+overall client decision is kept separately in `recommendation.action` /
+`recommendation.source`.
 
-**Raw `result.state`:**
+Flight-recorder analysis is monitor-only: missing/hanging ranks are surfaced in
+`fr_analysis` and the `s_fr_*` dataflow fields. When FR is returned as its own
+MCP result, its recommendation is `UNKNOWN`; it does not decide stop/restart
+policy.
 
-1. **`"timeout"`** — Analysis did not complete. Use `result.error` for the message; do not treat as a successful attribution. Do not use `result.state` for a continue/stop decision.
-2. **`"CONTINUE"`** — Backend state for non-stop output. Use `recommendation.action`, which may be `"RESTART"` or `"CONTINUE"` depending on the raw backend text.
-3. **`"STOP"`** — Analysis succeeded; attribution suggests **do not** continue (e.g. do not restart immediately; user intervention or different action required).
+Other fields (e.g. `result_id`, `resource_uri`, `fr`) may be present.
+`llm_merged_summary` appears only when the `LOG_AND_TRACE_WITH_LLM` merge ran with FR data.
+
+**Timeout marker:**
+
+`result.state === "timeout"` means analysis did not complete. Use `result.error`
+for the message; do not treat it as successful attribution.
 
 Clients should use `recommendation.action` for restart/stop decisions.
-
-**Type note:** `state` is a string in JSON for compatibility. The set of values is fixed; clients may treat it as an enum (e.g. in OpenAPI schema or client code: `"timeout" | "CONTINUE" | "STOP"`).
 
 4xx/5xx return `{ "error_code": string, "message": string }`.
 
@@ -288,5 +302,5 @@ asyncio.run(main())
 
 - **Service config** is in `config.py` (`Settings` from env with prefix `NVRX_ATTRSVC_`).
 - **`setup()`** in `config.py` loads settings and configures logging only.
-- **`AttributionHttpAdapter`** translates `Settings` into `AttributionControllerConfig`; **`AttributionController`** validates the LLM API key and wires postprocessing (`cluster_name`, `dataflow_index`, Slack, and the default poster).
-- The analyzer calls `post_results()` from the library when it has results; dataflow and Slack use the values owned by the controller.
+- **`AttributionHttpAdapter`** translates `Settings` into `AttributionControllerConfig`; **`AttributionController`** validates the LLM API key and wires postprocessing (`cluster_name`, Slack, and the default poster).
+- The analyzer schedules library postprocessing after analysis; dataflow and Slack use the values owned by the controller and do not gate the response returned to clients.

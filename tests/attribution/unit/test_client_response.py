@@ -1,7 +1,20 @@
 from nvidia_resiliency_ext.attribution import AttrSvcResult, parse_attrsvc_response
 
 
-def test_parse_attrsvc_response_uses_standard_recommendation():
+def _item(raw_text, action):
+    return {
+        "raw_text": raw_text,
+        "auto_resume": raw_text.split("\n", 1)[0],
+        "auto_resume_explanation": "",
+        "attribution_text": "",
+        "checkpoint_saved_flag": 0,
+        "action": action,
+        "primary_issues": [],
+        "secondary_issues": [],
+    }
+
+
+def test_parse_attrsvc_response_uses_serialized_recommendation():
     parsed = parse_attrsvc_response(
         {
             "status": "completed",
@@ -12,53 +25,55 @@ def test_parse_attrsvc_response_uses_standard_recommendation():
             },
             "result": {
                 "module": "log_analyzer",
-                "state": "CONTINUE",
-                "result": ["raw backend payload"],
+                "result": [_item("raw backend payload", "UNKNOWN")],
             },
         }
     )
 
     assert parsed.status == "completed"
     assert isinstance(parsed, AttrSvcResult)
-    assert parsed.result["state"] == "CONTINUE"
+    assert "state" not in parsed.result
     assert parsed.recommendation.action == "STOP"
     assert parsed.recommendation.reason == "standard stop"
     assert parsed.recommendation.source == "log_analyzer"
     assert parsed.should_stop is True
 
 
-def test_parse_attrsvc_response_falls_back_to_raw_result():
+def test_parse_attrsvc_response_missing_recommendation_is_unknown():
     parsed = parse_attrsvc_response(
         {
             "result": {
                 "module": "log_analyzer",
-                "state": "CONTINUE",
-                "result": ["RESTART IMMEDIATE"],
+                "result": [_item("RESTART IMMEDIATE", "RESTART")],
             },
         }
     )
 
     assert parsed.status == "completed"
-    assert parsed.recommendation.action == "RESTART"
-    assert parsed.recommendation.reason == "RESTART IMMEDIATE"
+    assert parsed.recommendation.action == "UNKNOWN"
+    assert parsed.recommendation.reason == ""
     assert parsed.should_stop is False
 
 
-def test_parse_attrsvc_response_fallback_uses_inner_result_only():
+def test_parse_attrsvc_response_uses_explicit_recommendation_over_inner_result():
     parsed = parse_attrsvc_response(
         {
             "status": "completed",
-            "state": "STOP",
+            "recommendation": {
+                "action": "CONTINUE",
+                "reason": "top-level decision",
+                "source": "log_analyzer",
+            },
             "result": {
                 "module": "log_analyzer",
-                "state": "CONTINUE",
-                "result": ["ERRORS NOT FOUND"],
+                "state": "STOP",
+                "result": [_item("STOP - DONT RESTART", "STOP")],
             },
         }
     )
 
     assert parsed.recommendation.action == "CONTINUE"
-    assert parsed.recommendation.reason == "ERRORS NOT FOUND"
+    assert parsed.recommendation.reason == "top-level decision"
     assert parsed.should_stop is False
 
 
@@ -96,7 +111,10 @@ def test_attrsvc_result_formats_smon_summary():
             "result": {
                 "module": "log_analyzer",
                 "result_id": "abcdef0123456789",
-                "result": ["RESTART IMMEDIATE", "details"],
+                "result": [
+                    _item("RESTART IMMEDIATE", "RESTART"),
+                    _item("details", "UNKNOWN"),
+                ],
             },
         },
         log_path="/tmp/slurm.out",
@@ -125,7 +143,7 @@ def test_attrsvc_result_formats_launcher_log_message():
             },
             "result": {
                 "module": "log_analyzer",
-                "result": ["ERRORS NOT FOUND"],
+                "result": [_item("ERRORS NOT FOUND", "CONTINUE")],
             },
         },
         log_path="/tmp/train.log",

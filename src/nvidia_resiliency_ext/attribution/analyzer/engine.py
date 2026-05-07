@@ -48,7 +48,11 @@ from nvidia_resiliency_ext.attribution.orchestration.analysis_pipeline import (
 )
 from nvidia_resiliency_ext.attribution.orchestration.config import ErrorCode, LogSageExecutionConfig
 from nvidia_resiliency_ext.attribution.orchestration.job import Job, JobMode
-from nvidia_resiliency_ext.attribution.orchestration.llm_output import attribution_recommendation
+from nvidia_resiliency_ext.attribution.orchestration.llm_output import (
+    fr_only_no_log_payload,
+    logsage_recommendation_from_payload,
+    recommendation_payload,
+)
 from nvidia_resiliency_ext.attribution.orchestration.log_analyzer import LogAnalyzer
 from nvidia_resiliency_ext.attribution.orchestration.types import (
     LogAnalysisCycleResult,
@@ -58,11 +62,27 @@ from nvidia_resiliency_ext.attribution.orchestration.types import (
     LogAnalyzerOutcome,
     LogAnalyzerSubmitResult,
 )
+from nvidia_resiliency_ext.attribution.orchestration.utils import (
+    selected_log_analyzer_cycle_payload,
+)
 from nvidia_resiliency_ext.attribution.trace_analyzer.trace_analyzer import TraceAnalyzer
 
 from ..coalescing import LogAnalysisCoalesced, coalesced_from_cache
 
 logger = logging.getLogger(__name__)
+
+
+def _coalesced_log_result_or_fr_only(bundle: LogAnalysisCoalesced) -> tuple[Dict[str, Any], bool]:
+    """Return the LogSage-shaped result payload and whether it was synthesized for FR-only."""
+    if bundle.log_result is not None:
+        return bundle.log_result, False
+    if not (bundle.fr_dump_path or bundle.fr_analysis):
+        raise RuntimeError("cached entry has no log analysis and no FR data")
+    return fr_only_no_log_payload(), True
+
+
+def _recommendation_payload_for_result(result: Dict[str, Any]) -> Dict[str, str]:
+    return recommendation_payload(logsage_recommendation_from_payload(result))
 
 
 class Analyzer:
@@ -331,40 +351,31 @@ class Analyzer:
                 validated, lambda: self._run_llm_analysis(validated, user=user, job_id=job_id)
             )
             bundle = coalesced_from_cache(coalesced_raw)
-            log_result = bundle.log_result
             fr_dump = bundle.fr_dump_path
             fr_analysis = bundle.fr_analysis
             llm_merged = bundle.llm_merged_summary
-            if log_result is None:
-                if not (fr_dump or fr_analysis):
-                    return LogAnalyzerError(
-                        error_code=ErrorCode.INTERNAL_ERROR,
-                        message="cached entry has no log analysis and no FR data",
-                    )
+            try:
+                log_result, fr_only = _coalesced_log_result_or_fr_only(bundle)
+            except RuntimeError as e:
+                return LogAnalyzerError(
+                    error_code=ErrorCode.INTERNAL_ERROR,
+                    message=str(e),
+                )
+            if fr_only:
                 if wl_restart is not None:
                     return LogAnalyzerError(
                         error_code=ErrorCode.INVALID_PATH,
                         message="wl_restart is not applicable for FR-only cache entries",
                     )
                 return LogAnalysisCycleResult(
-                    result={
-                        "state": "no_log",
-                        "result": [],
-                        "module": "fr_only",
-                    },
+                    result=log_result,
                     status="completed",
                     wl_restart=0,
                     wl_restart_count=None,
                     fr_dump_path=fr_dump,
                     fr_analysis=fr_analysis,
                     llm_merged_summary=llm_merged,
-                    recommendation=attribution_recommendation(
-                        {
-                            "state": "no_log",
-                            "result": [],
-                            "module": "fr_only",
-                        }
-                    ),
+                    recommendation=_recommendation_payload_for_result(log_result),
                 )
             # LLM returns multiple results per file (one per workload cycle); support wl_restart to select one
             results_list = (
@@ -378,8 +389,10 @@ class Analyzer:
                         error_code=ErrorCode.INVALID_PATH,
                         message=f"wl_restart={wl_restart} out of range (file has {wl_restart_count or 0} workload cycle(s))",
                     )
-                # Return single-cycle result (copy so we don't mutate cached log_result)
-                single_result = {**log_result, "result": [results_list[wl_restart]]}
+                single_result = selected_log_analyzer_cycle_payload(
+                    log_result,
+                    results_list[wl_restart],
+                )
                 return LogAnalysisCycleResult(
                     result=single_result,
                     status="completed",
@@ -388,9 +401,10 @@ class Analyzer:
                     fr_dump_path=fr_dump,
                     fr_analysis=fr_analysis,
                     llm_merged_summary=llm_merged,
-                    recommendation=attribution_recommendation(single_result),
+                    recommendation=_recommendation_payload_for_result(single_result),
                 )
             # No wl_restart: return full result (all cycles) with count so client can iterate
+            recommendation = logsage_recommendation_from_payload(log_result)
             return LogAnalysisCycleResult(
                 result=log_result,
                 status="completed",
@@ -399,7 +413,7 @@ class Analyzer:
                 fr_dump_path=fr_dump,
                 fr_analysis=fr_analysis,
                 llm_merged_summary=llm_merged,
-                recommendation=attribution_recommendation(log_result),
+                recommendation=recommendation_payload(recommendation),
             )
         except FrDumpPathNotFoundError as e:
             return LogAnalyzerError(
@@ -485,20 +499,15 @@ class Analyzer:
             )
 
         bundle = coalesced_from_cache(coalesced_raw)
-        result = bundle.log_result
         fr_dump = bundle.fr_dump_path
         fr_analysis = bundle.fr_analysis
-        if result is None:
-            if not (fr_dump or fr_analysis):
-                return LogAnalyzerError(
-                    error_code=ErrorCode.INTERNAL_ERROR,
-                    message="cached entry has no log analysis and no FR data",
-                )
-            result = {
-                "state": "no_log",
-                "result": [],
-                "module": "fr_only",
-            }
+        try:
+            result, _fr_only = _coalesced_log_result_or_fr_only(bundle)
+        except RuntimeError as e:
+            return LogAnalyzerError(
+                error_code=ErrorCode.INTERNAL_ERROR,
+                message=str(e),
+            )
         return LogAnalysisSplitlogResult(
             result=result,
             status="completed",
@@ -509,7 +518,7 @@ class Analyzer:
             fr_dump_path=fr_dump,
             fr_analysis=fr_analysis,
             llm_merged_summary=bundle.llm_merged_summary,
-            recommendation=attribution_recommendation(result),
+            recommendation=_recommendation_payload_for_result(result),
         )
 
     def _sync_analyze_via_coalescer(

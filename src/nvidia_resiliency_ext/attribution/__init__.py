@@ -103,6 +103,7 @@ if TYPE_CHECKING:
         LogAnalyzerFilePreview,
         LogAnalyzerOutcome,
         LogAnalyzerSubmitResult,
+        RawAnalysisResultItem,
     )
 
 _EXPORTS = {
@@ -163,6 +164,7 @@ _EXPORTS = {
     "LogAnalyzerFilePreview": ".orchestration.types",
     "LogAnalyzerOutcome": ".orchestration.types",
     "LogAnalyzerSubmitResult": ".orchestration.types",
+    "RawAnalysisResultItem": ".orchestration.types",
 }
 
 
@@ -212,6 +214,7 @@ __all__ = [
     "LogAnalyzerSubmitResult",
     "LogAnalysisSplitlogResult",
     "LogAnalyzerFilePreview",
+    "RawAnalysisResultItem",
     "AttributionController",
     "AttributionControllerConfig",
     "AttributionAnalysisConfig",

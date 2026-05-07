@@ -14,6 +14,13 @@ import os
 import time
 from typing import Any, Awaitable, Callable, Dict, List
 
+from nvidia_resiliency_ext.attribution.orchestration.llm_output import (
+    logsage_recommendation_from_payload,
+    logsage_timeout_payload,
+    recommendation_payload,
+)
+from nvidia_resiliency_ext.attribution.orchestration.types import AttributionRecommendation
+
 from .coalesced_cache import LogAnalysisCoalesced
 from .types import (
     CacheEntry,
@@ -27,6 +34,21 @@ from .types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _cache_recommendation(payload: Any, *, module: str) -> Dict[str, str]:
+    if isinstance(payload, dict):
+        recommendation = logsage_recommendation_from_payload(payload)
+        if not recommendation.source:
+            # This source fallback is cache-summary metadata, not analyzer output.
+            # ``recommendation.reason`` may be synthesized from service/cache errors
+            # when no recommendation envelope exists, so do not preserve it here.
+            recommendation = AttributionRecommendation(
+                action=recommendation.action,
+                source=module,
+            )
+        return recommendation_payload(recommendation)
+    return recommendation_payload(AttributionRecommendation(source=module))
 
 
 class RequestCoalescer:
@@ -337,30 +359,36 @@ class RequestCoalescer:
                             "fr_only" if (result.fr_dump_path or result.fr_analysis) else "unknown"
                         )
                         result_id = ""
-                        state = ""
+                        recommendation = recommendation_payload(
+                            AttributionRecommendation(source=module)
+                        )
                     elif isinstance(summary_src, dict):
                         module = str(summary_src.get("module", "unknown"))
                         result_id = str(summary_src.get("result_id", ""))[:16]
-                        state = str(summary_src.get("state", ""))
+                        recommendation = _cache_recommendation(summary_src, module=module)
                     else:
                         module = "unknown"
                         result_id = ""
-                        state = ""
+                        recommendation = recommendation_payload(
+                            AttributionRecommendation(source=module)
+                        )
                 elif isinstance(result, dict):
                     module = str(result.get("module", "unknown"))
                     result_id = str(result.get("result_id", ""))[:16]
-                    state = str(result.get("state", ""))
+                    recommendation = _cache_recommendation(result, module=module)
                 else:
                     module = "unknown"
                     result_id = ""
-                    state = ""
+                    recommendation = recommendation_payload(
+                        AttributionRecommendation(source=module)
+                    )
                 entries.append(
                     {
                         "path": key,
                         "age_seconds": round(age_seconds, 1),
                         "module": module,
                         "result_id": result_id,
-                        "state": state,
+                        "recommendation": recommendation,
                     }
                 )
             return {
@@ -703,12 +731,9 @@ class RequestCoalescer:
 
         except asyncio.TimeoutError:
             # Cache timeout result so subsequent GETs don't trigger new computes
-            timeout_result = {
-                "module": "log_analyzer",
-                "state": "timeout",
-                "result": [],
-                "error": f"LLM analysis timed out after {self._compute_timeout}s",
-            }
+            timeout_result = logsage_timeout_payload(
+                f"LLM analysis timed out after {self._compute_timeout}s"
+            )
 
             # Store file_mtime only (not size) so: cleanup evicts after 14 days;
             # next request sees size=None and invalidates, triggering a retry.

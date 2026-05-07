@@ -317,7 +317,8 @@ def _attribution_log_path(base_log_file: str) -> str:
 
 def _validate_attribution_endpoint(endpoint: str) -> None:
     hostname = _endpoint_hostname(endpoint)
-    if (hostname or endpoint).strip().lower() in {"0.0.0.0", "::", "[::]"}:
+    # This checks for and rejects bind-all addresses; it does not bind to them.
+    if (hostname or endpoint).strip().lower() in {"0.0.0.0", "::", "[::]"}:  # nosec B104
         raise ValueError(
             "--ft-attribution-endpoint must not be a bind-all address. "
             "Use localhost for launcher-managed attribution, or use a routable "

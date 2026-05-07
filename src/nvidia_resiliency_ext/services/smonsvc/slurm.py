@@ -5,12 +5,33 @@
 
 import logging
 import re
-import subprocess
+import shutil
+import subprocess  # nosec B404 - fixed SLURM commands are invoked with shell=False.
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_slurm_command(command: str) -> str:
+    resolved = shutil.which(command)
+    if resolved is None:
+        raise FileNotFoundError(command)
+    return resolved
+
+
+def _run_slurm_command(
+    cmd: list[str],
+    *,
+    timeout: int | float,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # nosec B603 - fixed SLURM argv, shell=False, bounded timeout.
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 @dataclass
@@ -67,6 +88,14 @@ class SlurmClient:
         self.squeue_timeout = squeue_timeout
         self.scontrol_timeout = scontrol_timeout
         self.stats = SlurmStats()
+        self._command_paths: dict[str, str] = {}
+
+    def _command(self, command: str) -> str:
+        path = self._command_paths.get(command)
+        if path is None:
+            path = _resolve_slurm_command(command)
+            self._command_paths[command] = path
+        return path
 
     def check_slurm_available(self) -> bool:
         """
@@ -76,12 +105,7 @@ class SlurmClient:
             True if squeue is available and working, False otherwise.
         """
         try:
-            result = subprocess.run(
-                ["squeue", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
+            result = _run_slurm_command([self._command("squeue"), "--version"], timeout=5)
             return result.returncode == 0
         except FileNotFoundError:
             return False
@@ -98,10 +122,8 @@ class SlurmClient:
             List of partition names, or None if sinfo fails.
         """
         try:
-            result = subprocess.run(
-                ["sinfo", "--noheader", "-o", "%P"],
-                capture_output=True,
-                text=True,
+            result = _run_slurm_command(
+                [_resolve_slurm_command("sinfo"), "--noheader", "-o", "%P"],
                 timeout=10,
             )
             if result.returncode != 0:
@@ -150,25 +172,23 @@ class SlurmClient:
             Dict of job_id -> job_info dict on success, None on failure.
             job_info contains: name, user, partition, state, stdout_path, stderr_path
         """
-        cmd = [
-            "squeue",
-            "-o",
-            "%i|%j|%u|%P|%T",  # job_id|name|user|partition|state
-            "--noheader",
-            "-p",
-            ",".join(self.partitions),
-            "-t",
-            self.SQUEUE_JOB_STATES,
-        ]
-
-        if not self.all_users and self.user:
-            cmd.extend(["-u", self.user])
-
         try:
+            cmd = [
+                self._command("squeue"),
+                "-o",
+                "%i|%j|%u|%P|%T",  # job_id|name|user|partition|state
+                "--noheader",
+                "-p",
+                ",".join(self.partitions),
+                "-t",
+                self.SQUEUE_JOB_STATES,
+            ]
+
+            if not self.all_users and self.user:
+                cmd.extend(["-u", self.user])
+
             self.stats.squeue_calls += 1
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=self.squeue_timeout
-            )
+            result = _run_slurm_command(cmd, timeout=self.squeue_timeout)
             if result.returncode != 0:
                 logger.warning(f"squeue failed: {result.stderr}")
                 self.stats.squeue_failures += 1
@@ -282,10 +302,8 @@ class SlurmClient:
         start_time = time.time()
         try:
             self.stats.scontrol_calls += 1
-            result = subprocess.run(
-                ["scontrol", "show", "job", job_ids_str],
-                capture_output=True,
-                text=True,
+            result = _run_slurm_command(
+                [self._command("scontrol"), "show", "job", job_ids_str],
                 timeout=self.scontrol_timeout,
             )
             elapsed = time.time() - start_time
@@ -387,17 +405,15 @@ class SlurmClient:
         start_time = time.time()
         try:
             self.stats.sacct_calls += 1
-            result = subprocess.run(
+            result = _run_slurm_command(
                 [
-                    "sacct",
+                    self._command("sacct"),
                     "-j",
                     job_ids_str,
                     "--noheader",
                     "--parsable2",
                     "--format=JobID,StdOut,StdErr",
                 ],
-                capture_output=True,
-                text=True,
                 timeout=self.scontrol_timeout,
             )
             elapsed = time.time() - start_time

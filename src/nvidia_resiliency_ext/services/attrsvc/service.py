@@ -72,7 +72,6 @@ def _controller_config_from_settings(cfg: Settings) -> AttributionControllerConf
         ),
         postprocessing=AttributionPostprocessingConfig(
             cluster_name=cfg.CLUSTER_NAME,
-            dataflow_index=cfg.DATAFLOW_INDEX,
             slack_bot_token=(cfg.SLACK_BOT_TOKEN or "").strip() or None,
             slack_channel=cfg.SLACK_CHANNEL,
         ),

@@ -32,7 +32,7 @@ from nvidia_resiliency_ext.attribution.trace_analyzer.fr_support import (
 from nvidia_resiliency_ext.attribution.trace_analyzer.trace_analyzer import TraceAnalyzer
 
 from .analysis_pipeline import AnalysisPipelineMode, run_attribution_pipeline
-from .config import ErrorCode, LogSageExecutionConfig
+from .config import MODULE_LOG_FR_ANALYZER, ErrorCode, LogSageExecutionConfig
 from .job import Job
 from .log_path_metadata import CYCLE_LOG_PATTERN
 from .splitlog import SplitlogTracker
@@ -152,13 +152,9 @@ class LogSageRunner:
         is_per_cycle = bool(re.search(CYCLE_LOG_PATTERN, path))
         run_kwargs = {
             "log_path": path,
-            "model": self.config.llm_model,
-            "base_url": self.config.llm_base_url,
-            "temperature": self.config.llm_temperature,
             "exclude_nvrx_logs": False,
             "is_per_cycle": is_per_cycle,
-            "top_p": self.config.llm_top_p,
-            "max_tokens": self.config.llm_max_tokens,
+            **self.config.llm_runtime_overrides(),
         }
         analyzer = await self._get_lib_log_analyzer(run_kwargs)
         async with self._log_analysis_lock:
@@ -170,16 +166,12 @@ class LogSageRunner:
         self._ensure_mcp_ready()
 
         is_per_cycle = bool(re.search(CYCLE_LOG_PATTERN, path))
-        run_kwargs = dict(
-            log_path=path,
-            model=self.config.llm_model,
-            base_url=self.config.llm_base_url,
-            temperature=self.config.llm_temperature,
-            exclude_nvrx_logs=False,
-            is_per_cycle=is_per_cycle,
-            top_p=self.config.llm_top_p,
-            max_tokens=self.config.llm_max_tokens,
-        )
+        run_kwargs = {
+            "log_path": path,
+            "exclude_nvrx_logs": False,
+            "is_per_cycle": is_per_cycle,
+            **self.config.llm_runtime_overrides(),
+        }
 
         async with self._log_analysis_lock:
             log_result = await self._mcp_client.run_module_resilient(
@@ -188,7 +180,7 @@ class LogSageRunner:
         return log_result
 
     async def fetch_log_result(self, path: str) -> Dict[str, Any]:
-        """Run LogSage (lib or MCP) for ``path``; return ``{\"result\": ..., \"state\": ...}``."""
+        """Run LogSage for ``path``; return result items plus a derived recommendation."""
         if self.config.use_lib_log_analysis:
             return await self._fetch_log_result_lib(path)
         return await self._fetch_log_result_mcp(path)
@@ -201,11 +193,10 @@ class LogSageRunner:
                 max_attempts=3,
                 fr_path=dump_path,
                 pattern="_dump_*",
-                model=self.config.llm_model,
-                base_url=self.config.llm_base_url,
                 verbose=False,
                 health_check=False,
                 llm_analyze=False,
+                **self.config.llm_endpoint_overrides(),
             )
         return fr_result_from_mcp_module_response(resp)
 
@@ -216,27 +207,24 @@ class LogSageRunner:
         return await self._fetch_fr_result_mcp(dump_path)
 
     async def fetch_log_fr_analyzer_mcp(
-        self, log_path: str, fr_dump_path: str
+        self, log_path: str, fr_dump_path: str, *, merge_llm: bool = False
     ) -> Tuple[Dict[str, Any], Optional[FRAnalysisResult], Optional[str]]:
-        """Single MCP ``log_fr_analyzer`` call: parallel log + FR and merge LLM inside the server."""
+        """Single MCP ``log_fr_analyzer`` call: collect log+FR, optionally merge with LLM."""
         self._ensure_mcp_ready()
         is_per_cycle = bool(re.search(CYCLE_LOG_PATTERN, log_path))
-        kwargs: Dict[str, Any] = dict(
-            log_path=log_path,
-            fr_path=fr_dump_path,
-            model=self.config.llm_model,
-            base_url=self.config.llm_base_url,
-            temperature=self.config.llm_temperature,
-            top_p=self.config.llm_top_p,
-            max_tokens=self.config.llm_max_tokens,
-            exclude_nvrx_logs=False,
-            is_per_cycle=is_per_cycle,
-            pattern="_dump_*",
-            verbose=False,
-            health_check=False,
-            llm_analyze=False,
-            threshold=0,
-        )
+        kwargs: Dict[str, Any] = {
+            "log_path": log_path,
+            "fr_path": fr_dump_path,
+            "exclude_nvrx_logs": False,
+            "is_per_cycle": is_per_cycle,
+            "pattern": "_dump_*",
+            "verbose": False,
+            "health_check": False,
+            "llm_analyze": False,
+            "merge_llm": merge_llm,
+            "threshold": 0,
+            **self.config.llm_runtime_overrides(),
+        }
 
         async with self._log_analysis_lock:
             resp = await self._mcp_client.run_module_resilient(
@@ -248,22 +236,32 @@ class LogSageRunner:
         if resp.get("error"):
             raise RuntimeError(f"log_fr_analyzer MCP error: {resp.get('error')}")
 
-        inner = resp.get("result")
-        if not isinstance(inner, dict) or "log" not in inner or "fr" not in inner:
-            raise RuntimeError(f"log_fr_analyzer unexpected result shape: {inner!r}")
-
-        log_part = inner["log"]
-        if not isinstance(log_part, dict):
-            raise RuntimeError(f"log_fr_analyzer log part not dict: {log_part!r}")
-        log_dict: Dict[str, Any] = {
-            "result": log_part.get("result"),
-            "state": log_part.get("state"),
+        log_result = resp.get("result")
+        if not isinstance(log_result, list):
+            raise RuntimeError(
+                "log_fr_analyzer result must be LogSage item list, "
+                f"got {type(log_result).__name__}"
+            )
+        recommendation = resp.get("recommendation")
+        if not isinstance(recommendation, dict):
+            raise RuntimeError(
+                "log_fr_analyzer recommendation must be dict, "
+                f"got {type(recommendation).__name__}"
+            )
+        log_dict = {
+            "module": resp.get("module", MODULE_LOG_FR_ANALYZER),
+            "result": log_result,
+            "recommendation": recommendation,
         }
+        if "result_id" in resp:
+            log_dict["result_id"] = resp["result_id"]
+        if "resource_uri" in resp:
+            log_dict["resource_uri"] = resp["resource_uri"]
 
-        fr_part = inner["fr"]
+        fr_part = resp.get("fr")
         fr_payload = fr_part.get("result") if isinstance(fr_part, dict) else None
         fr_analysis = fr_result_from_mcp_module_response({"result": fr_payload})
-        summary = inner.get("llm_merged_summary")
+        summary = resp.get("llm_merged_summary") if merge_llm else None
         if summary is not None and not isinstance(summary, str):
             summary = str(summary)
         return log_dict, fr_analysis, summary
@@ -298,6 +296,7 @@ class LogAnalyzer:
             track_submission=track_submission,
             splitlog_tracker=splitlog_tracker,
         )
+        self._post_tasks: set[asyncio.Task[None]] = set()
 
     def validate_path(
         self,
@@ -360,6 +359,11 @@ class LogAnalyzer:
 
     async def shutdown_async(self) -> None:
         await self._runner.shutdown_async()
+        if self._post_tasks:
+            tasks = tuple(self._post_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def connect_mcp(self) -> None:
         await self._runner.connect_mcp()
@@ -376,28 +380,91 @@ class LogAnalyzer:
     def _post_analysis_results(
         self,
         result_items: List[Any],
-        processing_time: float,
+        attribution_analysis_duration_seconds: float,
+        attribution_analysis_completed_ms: int,
         path: str,
         user: str,
         job_id: Optional[str],
         fr_dump_path: Optional[str] = None,
         fr_analysis: Optional[FRAnalysisResult] = None,
+        recommendation: Any = None,
     ) -> None:
         """Post each analysis result to dataflow/Slack. Shared by lib and MCP paths."""
         post_analysis_items(
             result_items,
-            processing_time,
+            attribution_analysis_duration_seconds,
             path,
             user,
             job_id,
             fr_dump_path=fr_dump_path,
             fr_analysis=fr_analysis,
+            attribution_analysis_completed_ms=attribution_analysis_completed_ms,
+            recommendation=recommendation,
         )
+
+    async def _run_post_analysis_results(
+        self,
+        result_items: List[Any],
+        attribution_analysis_duration_seconds: float,
+        attribution_analysis_completed_ms: int,
+        path: str,
+        user: str,
+        job_id: Optional[str],
+        fr_dump_path: Optional[str] = None,
+        fr_analysis: Optional[FRAnalysisResult] = None,
+        recommendation: Any = None,
+    ) -> None:
+        try:
+            await asyncio.to_thread(
+                self._post_analysis_results,
+                result_items,
+                attribution_analysis_duration_seconds,
+                attribution_analysis_completed_ms,
+                path,
+                user,
+                job_id,
+                fr_dump_path=fr_dump_path,
+                fr_analysis=fr_analysis,
+                recommendation=recommendation,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Observability postprocessing failed for %s", path)
+
+    def _schedule_post_analysis_results(
+        self,
+        result_items: List[Any],
+        attribution_analysis_duration_seconds: float,
+        attribution_analysis_completed_ms: int,
+        path: str,
+        user: str,
+        job_id: Optional[str],
+        fr_dump_path: Optional[str] = None,
+        fr_analysis: Optional[FRAnalysisResult] = None,
+        recommendation: Any = None,
+    ) -> None:
+        task = asyncio.create_task(
+            self._run_post_analysis_results(
+                list(result_items),
+                attribution_analysis_duration_seconds,
+                attribution_analysis_completed_ms,
+                path,
+                user,
+                job_id,
+                fr_dump_path=fr_dump_path,
+                fr_analysis=fr_analysis,
+                recommendation=recommendation,
+            ),
+            name=f"nvrx-observability-post:{os.path.basename(path)}",
+        )
+        self._post_tasks.add(task)
+        task.add_done_callback(self._post_tasks.discard)
 
     async def run_attribution_for_path(
         self, path: str, user: str = "unknown", job_id: Optional[str] = None
     ) -> LogAnalysisCoalesced:
-        """Run LogSage and optional FR pipeline for ``path``; post results; return coalescer payload."""
+        """Run LogSage and optional FR pipeline for ``path``; return coalescer payload."""
         if not os.access(path, os.R_OK):
             self.record_file_permission_error()
             raise PermissionError(f"Log file not readable: {path}")
@@ -417,9 +484,15 @@ class LogAnalyzer:
                 async def _mcp_combined(
                     lp: str, fd: str
                 ) -> tuple[Dict[str, Any], Optional[FRAnalysisResult], Optional[str]]:
-                    return await self._runner.fetch_log_fr_analyzer_mcp(lp, fd)
+                    return await self._runner.fetch_log_fr_analyzer_mcp(
+                        lp,
+                        fd,
+                        merge_llm=(mode == AnalysisPipelineMode.LOG_AND_TRACE_WITH_LLM),
+                    )
 
                 pipeline_kw["run_log_fr_analyzer_mcp"] = _mcp_combined
+
+        pipeline_kw.update(cfg.pipeline_llm_overrides())
 
         combined = await run_attribution_pipeline(
             path,
@@ -429,17 +502,13 @@ class LogAnalyzer:
                 if mode != AnalysisPipelineMode.TRACE_ONLY
                 else None
             ),
-            llm_model=cfg.llm_model,
-            llm_base_url=cfg.llm_base_url,
-            llm_temperature=cfg.llm_temperature,
-            llm_top_p=cfg.llm_top_p,
-            llm_max_tokens=cfg.llm_max_tokens,
             **pipeline_kw,
         )
         log_result = combined.log_result
         fr_dump_path = combined.fr_dump_path
         fr_analysis = combined.fr_analysis
-        processing_time = combined.processing_time
+        attribution_analysis_duration_seconds = combined.processing_time
+        attribution_analysis_completed_ms = combined.analysis_completed_at_ms
         llm_merged_summary = combined.llm_merged_summary
 
         if mode == AnalysisPipelineMode.TRACE_ONLY:
@@ -473,14 +542,17 @@ class LogAnalyzer:
             result_items = raw_result or []
         else:
             result_items = []
-        self._post_analysis_results(
+        recommendation = log_result.get("recommendation") if isinstance(log_result, dict) else None
+        self._schedule_post_analysis_results(
             result_items,
-            processing_time,
+            attribution_analysis_duration_seconds,
+            attribution_analysis_completed_ms,
             path,
             user,
             job_id,
             fr_dump_path=fr_dump_path,
             fr_analysis=fr_analysis,
+            recommendation=recommendation,
         )
         return LogAnalysisCoalesced(
             log_result=log_result,

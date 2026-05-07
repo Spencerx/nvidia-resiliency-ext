@@ -4,6 +4,8 @@ Module definitions for NVRX Attribution modules.
 This file registers all available attribution modules with the registry.
 """
 
+from typing import Any
+
 from nvidia_resiliency_ext.attribution.combined_log_fr.combined_log_fr_mcp import (
     CombinedLogFRMCPOrchestrator,
 )
@@ -11,9 +13,94 @@ from nvidia_resiliency_ext.attribution.log_analyzer.nvrx_logsage import NVRxLogA
 from nvidia_resiliency_ext.attribution.mcp_integration.registry import global_registry
 from nvidia_resiliency_ext.attribution.orchestration.config import (
     DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MAX_TOKENS,
     DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_TEMPERATURE,
+    DEFAULT_LLM_TOP_P,
+)
+from nvidia_resiliency_ext.attribution.orchestration.types import (
+    RAW_ANALYSIS_RESULT_ITEM_PAYLOAD_FIELDS,
+    RECOMMENDATION_ACTIONS,
+    RECOMMENDATION_PAYLOAD_FIELDS,
 )
 from nvidia_resiliency_ext.attribution.trace_analyzer.fr_attribution import CollectiveAnalyzer
+
+_RAW_ANALYSIS_RESULT_ITEM_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
+    "raw_text": {
+        "type": "string",
+        "description": "Raw LogSage result text",
+    },
+    "auto_resume": {
+        "type": "string",
+        "description": "Parsed restart/stop decision from LogSage",
+    },
+    "auto_resume_explanation": {
+        "type": "string",
+        "description": "Parsed explanation for the restart/stop decision",
+    },
+    "attribution_text": {
+        "type": "string",
+        "description": "Parsed attribution text without the Attribution: prefix",
+    },
+    "checkpoint_saved_flag": {
+        "type": "integer",
+        "enum": [0, 1],
+        "description": "Whether LogSage reported a checkpoint was saved",
+    },
+    "action": {
+        "type": "string",
+        "enum": list(RECOMMENDATION_ACTIONS),
+        "description": "Parsed cycle action from LogSage",
+    },
+    "primary_issues": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Parsed primary attribution issues",
+    },
+    "secondary_issues": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Parsed secondary attribution issues",
+    },
+}
+
+_RECOMMENDATION_FIELD_SCHEMAS: dict[str, dict[str, Any]] = {
+    "action": {
+        "type": "string",
+        "enum": list(RECOMMENDATION_ACTIONS),
+        "description": "Client-facing action derived from LogSage output",
+    },
+    "source": {
+        "type": "string",
+        "description": "Signal/source that produced the recommendation",
+    },
+}
+
+
+def _raw_analysis_result_item_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            field_name: _RAW_ANALYSIS_RESULT_ITEM_FIELD_SCHEMAS[field_name]
+            for field_name in RAW_ANALYSIS_RESULT_ITEM_PAYLOAD_FIELDS
+        },
+        "required": list(RAW_ANALYSIS_RESULT_ITEM_PAYLOAD_FIELDS),
+    }
+
+
+def _recommendation_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            field_name: _RECOMMENDATION_FIELD_SCHEMAS[field_name]
+            for field_name in RECOMMENDATION_PAYLOAD_FIELDS
+        },
+        "required": list(RECOMMENDATION_PAYLOAD_FIELDS),
+        "description": (
+            "Derived client recommendation; consumers should branch on this, "
+            "not raw LogSage fields"
+        ),
+    }
 
 
 def register_all_modules():
@@ -41,17 +128,17 @@ def register_all_modules():
                 "temperature": {
                     "type": "number",
                     "description": "Temperature for LLM sampling",
-                    "default": 0.2,
+                    "default": DEFAULT_LLM_TEMPERATURE,
                 },
                 "top_p": {
                     "type": "number",
                     "description": "Top-p for LLM sampling",
-                    "default": 0.7,
+                    "default": DEFAULT_LLM_TOP_P,
                 },
                 "max_tokens": {
                     "type": "integer",
                     "description": "Maximum tokens for LLM response",
-                    "default": 8192,
+                    "default": DEFAULT_LLM_MAX_TOKENS,
                 },
                 "exclude_nvrx_logs": {
                     "type": "boolean",
@@ -69,16 +156,18 @@ def register_all_modules():
         output_schema={
             "type": "object",
             "properties": {
+                "module": {
+                    "type": "string",
+                    "description": "Module name: log_analyzer",
+                },
                 "result": {
-                    "type": "string",
-                    "description": "Attribution result with proposed solution",
+                    "type": "array",
+                    "items": _raw_analysis_result_item_schema(),
+                    "description": "Per-cycle attribution results",
                 },
-                "state": {
-                    "type": "string",
-                    "enum": ["CONTINUE", "STOP"],
-                    "description": "Whether to continue pipeline",
-                },
+                "recommendation": _recommendation_schema(),
             },
+            "required": ["module", "result", "recommendation"],
         },
         requires_llm=True,
         dependencies=[],
@@ -137,24 +226,29 @@ def register_all_modules():
         output_schema={
             "type": "object",
             "properties": {
+                "module": {
+                    "type": "string",
+                    "description": "Module name: fr_analyzer",
+                },
                 "result": {
                     "type": "object",
                     "description": "Collective analysis results including hanging ranks",
                 },
-                "state": {"type": "string", "enum": ["CONTINUE", "STOP"]},
+                "recommendation": _recommendation_schema(),
             },
+            "required": ["module", "result", "recommendation"],
         },
         requires_llm=False,
         dependencies=[],
     )
 
-    # Log + FR + merge LLM in one MCP round-trip (path mode), or legacy input_data-only merge
+    # Log + FR in one MCP round-trip (path mode), with optional LLM merge.
     global_registry.register(
         name="log_fr_analyzer",
         module_class=CombinedLogFRMCPOrchestrator,
         description=(
-            "Path mode: run LogSage and FR in parallel, then merge via LLM in this process. "
-            "Legacy: pass input_data (cached log + FR outputs) for merge-only."
+            "Path mode: run LogSage and FR in parallel in this process. "
+            "Set merge_llm=true to also run the Log+FR LLM merge."
         ),
         input_schema={
             "type": "object",
@@ -172,8 +266,10 @@ def register_all_modules():
                 },
                 "input_data": {
                     "type": "array",
-                    "items": {"type": "array"},
-                    "description": "Legacy: [log_result, fr_result] from prior tool runs",
+                    "items": {
+                        "description": "First item is a LogSage result; second item is an FR result",
+                    },
+                    "description": "Input-data mode: [log_result, fr_result] from prior tool runs",
                 },
                 "model": {
                     "type": "string",
@@ -185,10 +281,15 @@ def register_all_modules():
                     "description": "LLM base url",
                     "default": DEFAULT_LLM_BASE_URL,
                 },
-                "temperature": {"type": "number", "default": 0.2},
-                "top_p": {"type": "number", "default": 0.7},
-                "max_tokens": {"type": "integer", "default": 8192},
+                "temperature": {"type": "number", "default": DEFAULT_LLM_TEMPERATURE},
+                "top_p": {"type": "number", "default": DEFAULT_LLM_TOP_P},
+                "max_tokens": {"type": "integer", "default": DEFAULT_LLM_MAX_TOKENS},
                 "threshold": {"type": "integer", "default": 0},
+                "merge_llm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Run Log+FR LLM merge after collecting LogSage and FR outputs",
+                },
                 "exclude_nvrx_logs": {"type": "boolean", "default": False},
                 "is_per_cycle": {"type": "boolean", "default": False},
                 "pattern": {"type": "string", "default": "_dump_*"},
@@ -200,12 +301,29 @@ def register_all_modules():
         output_schema={
             "type": "object",
             "properties": {
-                "result": {
-                    "type": "object",
-                    "description": "Path mode: log, fr, llm_merged_summary; legacy: merged string",
+                "module": {
+                    "type": "string",
+                    "description": "Module name: log_fr_analyzer",
                 },
-                "state": {"type": "string", "enum": ["CONTINUE", "STOP"]},
+                "result": {
+                    "type": "array",
+                    "items": _raw_analysis_result_item_schema(),
+                    "description": "Per-cycle LogSage attribution results from combined log+FR analysis",
+                },
+                "recommendation": _recommendation_schema(),
+                "fr": {
+                    "type": "object",
+                    "description": "Flight recorder analysis payload and internal state",
+                },
+                "llm_merged_summary": {
+                    "type": "string",
+                    "description": (
+                        "LLM merge summary from LogSage and flight recorder outputs; present only "
+                        "when merge ran with FR data"
+                    ),
+                },
             },
+            "required": ["module", "result", "recommendation", "fr"],
         },
         requires_llm=True,
         dependencies=[],

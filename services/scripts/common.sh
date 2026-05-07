@@ -48,7 +48,7 @@ setup_llm_api_key() {
 #   $1 - "attrsvc" or "smonsvc" or "both" (default: both)
 #   $2 - repo root directory (default: NVRX_REPO_DIR or ~/nvidia-resiliency-ext)
 # Environment:
-#   PIP_EXTRA_INDEX_URL - if set, installs root dataflow extra for attrsvc
+#   PIP_EXTRA_INDEX_URL - optional extra index for package resolution
 install_nvrx_packages() {
     local mode="${1:-both}"
     local repo_dir="${2:-${NVRX_REPO_DIR:-${HOME}/nvidia-resiliency-ext}}"
@@ -66,7 +66,6 @@ install_nvrx_packages() {
     if [[ "$mode" == "attrsvc" || "$mode" == "both" ]]; then
         extras="[attribution]"
         if [[ -n "${PIP_EXTRA_INDEX_URL}" ]]; then
-            extras="[attribution,dataflow]"
             pip_extra_args=(--extra-index-url "${PIP_EXTRA_INDEX_URL}")
         fi
     fi

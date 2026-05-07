@@ -22,6 +22,7 @@ Environment variables (prefix: `NVRX_SMONSVC_`) or command-line arguments:
 | Variable / Argument | Default | Description |
 |---------------------|---------|-------------|
 | `NVRX_ATTRSVC_ENDPOINT` / `--attrsvc-endpoint` | `http://localhost:8000` | Attribution service endpoint (`http://host:port` or `unix:///path.sock`) |
+| `HOST` / `--host` | `127.0.0.1` | Host/interface for the HTTP status server. Deployments that need remote access should set `NVRX_SMONSVC_HOST=0.0.0.0` explicitly. |
 | `PORT` / `--port` | `None` | Port for HTTP server (stats, health, jobs) |
 | `INTERVAL` / `--interval` | `180` | Poll interval in seconds |
 | `PARTITIONS` / `--partitions` | `batch batch_long` | SLURM partitions (space-separated) |
@@ -124,6 +125,9 @@ nvrx-smonsvc --job-pattern "training_.*"
 
 # Enable HTTP status server
 nvrx-smonsvc --port 8100
+
+# Bind status server on all interfaces for remote access
+nvrx-smonsvc --host 0.0.0.0 --port 8100
 
 # Verbose logging
 nvrx-smonsvc -v

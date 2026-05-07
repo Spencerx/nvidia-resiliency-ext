@@ -191,7 +191,7 @@ def create_app(cfg: Settings) -> FastAPI:
         """
         Health check endpoint.
 
-        Returns status based on LLM and dataflow health:
+        Returns status based on controller dependency health:
         - "ok": All systems healthy
         - "degraded": Some issues but service is functional (20-50% error rate)
         - "fail": Critical issues (>50% error rate)
@@ -318,7 +318,8 @@ def create_app(cfg: Settings) -> FastAPI:
         - Response includes mode="splitlog", sched_restarts count, and log_file path
 
         For single-file mode jobs:
-        - The file and wl_restart parameters are ignored
+        - The file parameter is ignored
+        - Use wl_restart= to select a specific workload restart within the file
         - Response includes status="completed"
 
         See spec Section 10 and 17 for GET flow details.

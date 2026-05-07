@@ -69,7 +69,7 @@ export NVRX_LOGS_DIR=/custom/log/dir       # Logs directory
 export SNAPSHOT_INTERVAL=300               # Snapshot every 5 min
 
 # Processed files ledger (optional - prevents re-analysis after restart)
-# Tracks which files have been analyzed and posted to Elasticsearch
+# Tracks which files have been analyzed and posted to the configured dataflow HTTP endpoint
 export NVRX_ATTRSVC_CACHE_FILE=${NVRX_LOGS_DIR}/attrsvc_cache.json
 # Grace period before validating file changes (default 600s = 10 min)
 # export NVRX_ATTRSVC_CACHE_GRACE_PERIOD_SECONDS=600

@@ -40,6 +40,7 @@ from nvidia_resiliency_ext.attribution.orchestration.types import (
 from nvidia_resiliency_ext.attribution.postprocessing import ResultPoster
 from nvidia_resiliency_ext.attribution.postprocessing import configure as configure_postprocessing
 from nvidia_resiliency_ext.attribution.postprocessing import get_posting_stats, get_slack_stats
+from nvidia_resiliency_ext.attribution.postprocessing.config import dataflow_posting_enabled
 from nvidia_resiliency_ext.attribution.postprocessing.post_backend import post
 
 logger = logging.getLogger(__name__)
@@ -82,7 +83,6 @@ class AttributionPostprocessingConfig:
     """Posting and notification configuration for attribution side effects."""
 
     cluster_name: str = ""
-    dataflow_index: str = ""
     slack_bot_token: str | None = None
     slack_channel: str = ""
     enable_default_poster: bool = True
@@ -138,21 +138,15 @@ class AttributionController:
             coalescing_kwargs["grace_period_seconds"] = config.cache.grace_period_seconds
 
         use_lib = self._engine_backend == "lib"
-        analyzer_engine_kwargs: dict[str, Any] = {
-            "use_lib_log_analysis": use_lib,
-            "mcp_server_log_level": config.analysis.mcp_server_log_level,
-        }
-        if config.analysis.llm_model is not None:
-            analyzer_engine_kwargs["llm_model"] = config.analysis.llm_model
-        if config.analysis.llm_base_url is not None:
-            analyzer_engine_kwargs["llm_base_url"] = config.analysis.llm_base_url
-        if config.analysis.llm_temperature is not None:
-            analyzer_engine_kwargs["llm_temperature"] = config.analysis.llm_temperature
-        if config.analysis.llm_top_p is not None:
-            analyzer_engine_kwargs["llm_top_p"] = config.analysis.llm_top_p
-        if config.analysis.llm_max_tokens is not None:
-            analyzer_engine_kwargs["llm_max_tokens"] = config.analysis.llm_max_tokens
-        analyzer_engine = LogSageExecutionConfig(**analyzer_engine_kwargs)
+        analyzer_engine = LogSageExecutionConfig(
+            use_lib_log_analysis=use_lib,
+            mcp_server_log_level=config.analysis.mcp_server_log_level,
+            llm_model=config.analysis.llm_model,
+            llm_base_url=config.analysis.llm_base_url,
+            llm_temperature=config.analysis.llm_temperature,
+            llm_top_p=config.analysis.llm_top_p,
+            llm_max_tokens=config.analysis.llm_max_tokens,
+        )
 
         self._analyzer = Analyzer(
             allowed_root=config.allowed_root,
@@ -445,8 +439,7 @@ class AttributionController:
             },
             "postprocessing": {
                 "cluster_name": self.config.postprocessing.cluster_name,
-                "dataflow_index": self.config.postprocessing.dataflow_index,
-                "dataflow_enabled": bool(self.config.postprocessing.dataflow_index),
+                "dataflow_enabled": dataflow_posting_enabled(),
                 "slack_channel": self.config.postprocessing.slack_channel,
                 "slack_enabled": self._slack_configured,
             },
@@ -480,7 +473,6 @@ class AttributionController:
         configure_postprocessing(
             default_poster=poster,
             cluster_name=cfg.cluster_name or "",
-            dataflow_index=cfg.dataflow_index or "",
             slack_bot_token=slack_token,
             slack_channel=slack_channel,
         )

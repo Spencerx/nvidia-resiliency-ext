@@ -18,10 +18,9 @@ import os
 import stat
 from typing import Any, Dict, Union
 
-from nvidia_resiliency_ext.attribution.base import AttributionState
-
-from .config import ErrorCode
-from .types import LogAnalyzerError
+from .config import MODULE_LOG_ANALYZER, RESP_MODULE, RESP_RESULT, ErrorCode
+from .llm_output import logsage_recommendation, recommendation_payload
+from .types import LogAnalyzerError, LogSageAnalysisResult, RawAnalysisResultItem
 
 logger = logging.getLogger(__name__)
 
@@ -106,20 +105,67 @@ def validate_log_path(
     return real
 
 
-# --- In-process LogSage result shaping ----------------------------------------
+# --- LogSage result shaping ---------------------------------------------------
+
+
+LOG_ANALYZER_MODULE = MODULE_LOG_ANALYZER
+
+
+def log_analyzer_result_payload(
+    actual_result: list[Any] | LogSageAnalysisResult,
+    *,
+    module: str = LOG_ANALYZER_MODULE,
+) -> Dict[str, Any]:
+    """Build the serialized LogSage payload plus the source-derived recommendation."""
+    if isinstance(actual_result, LogSageAnalysisResult):
+        analysis_result = actual_result
+    else:
+        items = [RawAnalysisResultItem.from_payload(item) for item in actual_result]
+        analysis_result = LogSageAnalysisResult(
+            items,
+            logsage_recommendation(items, source=module),
+        )
+    payload: Dict[str, Any] = {
+        RESP_MODULE: module,
+        RESP_RESULT: [item.to_payload() for item in analysis_result.items],
+    }
+    payload["recommendation"] = recommendation_payload(analysis_result.recommendation)
+    return payload
+
+
+def selected_log_analyzer_cycle_payload(
+    log_result: Dict[str, Any],
+    result_item: Any,
+) -> Dict[str, Any]:
+    """Return a canonical one-cycle LogSage payload preserving response metadata."""
+    module = str(log_result.get(RESP_MODULE) or LOG_ANALYZER_MODULE)
+    recommendation = log_result.get("recommendation")
+    source = module
+    if isinstance(recommendation, dict):
+        rec_source = recommendation.get("source")
+        if isinstance(rec_source, str) and rec_source.strip():
+            source = rec_source.strip()
+    selected = {
+        key: value
+        for key, value in log_result.items()
+        if key not in {RESP_RESULT, "recommendation"}
+    }
+    cycle_payload = log_analyzer_result_payload([result_item], module=module)
+    cycle_payload["recommendation"]["source"] = source
+    selected.update(cycle_payload)
+    return selected
 
 
 def nvrx_run_result_to_log_dict(result: Any, path: str) -> Dict[str, Any]:
-    """Normalize :meth:`NVRxLogAnalyzer.run` return value to MCP-shaped ``log_result`` dict."""
+    """Normalize :meth:`NVRxLogAnalyzer.run` output to the service/MCP ``log_result`` shape."""
     if result is None:
         logger.error("Lib log analyzer run returned None for path=%s", path)
         raise RuntimeError("LogSage run returned None")
 
     actual_result = result
-    state = AttributionState.CONTINUE
     if isinstance(result, tuple) and len(result) == 2:
         try:
-            actual_result, state = result
+            actual_result, _state = result
         except (ValueError, TypeError) as e:
             logger.error(
                 "Lib log analyzer result unpack failed for path=%s: %s",
@@ -129,7 +175,10 @@ def nvrx_run_result_to_log_dict(result: Any, path: str) -> Dict[str, Any]:
             )
             raise RuntimeError(f"LogSage result had unexpected shape for path={path}: {e}") from e
 
-    return {
-        "result": actual_result,
-        "state": state.name if isinstance(state, AttributionState) else str(state),
-    }
+    if not isinstance(actual_result, (list, LogSageAnalysisResult)):
+        raise RuntimeError(
+            f"LogSage result must be LogSageAnalysisResult or list[RawAnalysisResultItem] for path={path}, "
+            f"got {type(actual_result).__name__}"
+        )
+
+    return log_analyzer_result_payload(actual_result)

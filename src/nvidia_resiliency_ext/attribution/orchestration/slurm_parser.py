@@ -33,8 +33,8 @@ _WRITING_LOGS_TO_PATTERN = re.compile(r"^Writing logs to\s+(\S+)", re.MULTILINE)
 class SlurmOutputInfo:
     """Information extracted from a SLURM output file.
 
-    Note: This is the legacy dataclass. New code should use ParseResult
-    from parser_base.py for consistency across parsers.
+    ParseResult from parser_base.py is the parser-wide return shape; this dataclass
+    carries SLURM-specific details for helper callers.
     """
 
     logs_dir: Optional[str]  # Path to LOGS_DIR if found

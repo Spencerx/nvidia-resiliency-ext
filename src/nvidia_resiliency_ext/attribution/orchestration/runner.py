@@ -12,9 +12,8 @@ dedicated thread with an event loop and submit work to it from sync code.
 **MCP backend** (``use_lib_log_analysis=False``): after
 :meth:`~nvidia_resiliency_ext.attribution.controller.AttributionController.start`,
 the controller's analyzer runs ``LOG_AND_TRACE`` with flight-recorder discovery enabled.
-When an FR dump path is discovered from the log, analysis uses a **single** MCP round-trip
-to the ``log_fr_analyzer`` module (LogSage + FR in the MCP server), not separate
-``log_analyzer`` + ``fr_analyzer`` calls.
+Plain ``LOG_AND_TRACE`` uses the MCP ``log_fr_analyzer`` tool to collect LogSage + FR
+without merge LLM; ``LOG_AND_TRACE_WITH_LLM`` uses the same tool with merge enabled.
 
 The HTTP service (nvidia_resiliency_ext.services.attrsvc) does not use this module; it builds
 :class:`~nvidia_resiliency_ext.attribution.controller.AttributionController` with
@@ -97,7 +96,6 @@ def _get_or_create_controller(
     *,
     slack_bot_token: Optional[str] = None,
     slack_channel: str = "",
-    dataflow_index: str = "",
     cluster_name: str = "",
 ) -> bool:
     """Ensure the long-lived controller exists; sets event-loop/controller globals.
@@ -132,7 +130,6 @@ def _get_or_create_controller(
                     cache=AttributionCacheConfig(compute_timeout=timeout_seconds),
                     postprocessing=AttributionPostprocessingConfig(
                         cluster_name=cluster_name,
-                        dataflow_index=dataflow_index,
                         slack_bot_token=slack_bot_token,
                         slack_channel=slack_channel,
                     ),
@@ -145,8 +142,8 @@ def _get_or_create_controller(
             future.result(timeout=timeout_seconds)
             if not use_lib:
                 logger.info(
-                    "log analysis MCP: connected; LOG_AND_TRACE will use MCP module "
-                    "'log_fr_analyzer' when an FR dump path is found in the log"
+                    "log analysis MCP: connected; LOG_AND_TRACE uses log_fr_analyzer "
+                    "with merge_llm=false when an FR dump path is found"
                 )
         except Exception as e:
             _controller = None
@@ -161,7 +158,6 @@ def ensure_analyzer_ready(
     *,
     slack_bot_token: Optional[str] = None,
     slack_channel: str = "",
-    dataflow_index: str = "",
     cluster_name: str = "",
 ) -> bool:
     """Eagerly create the controller (event loop, AttributionController, MCP connection).
@@ -171,7 +167,6 @@ def ensure_analyzer_ready(
         use_lib_log_analysis,
         slack_bot_token=slack_bot_token,
         slack_channel=slack_channel,
-        dataflow_index=dataflow_index,
         cluster_name=cluster_name,
     )
 
@@ -194,7 +189,6 @@ def run_log_analysis_sync(
     use_lib_log_analysis: Optional[bool] = None,
     slack_bot_token: Optional[str] = None,
     slack_channel: str = "",
-    dataflow_index: str = "",
     cluster_name: str = "",
 ) -> Optional[Dict[str, Any]]:
     """Run log analysis synchronously with a timeout.
@@ -221,7 +215,6 @@ def run_log_analysis_sync(
         use_lib_log_analysis: ``False`` for MCP backend; ``True`` for in-process LogSage.
         slack_bot_token: Optional Slack token for controller postprocessing.
         slack_channel: Optional Slack channel for controller postprocessing.
-        dataflow_index: Optional dataflow/Elasticsearch index for controller postprocessing.
         cluster_name: Optional cluster name for controller postprocessing.
 
     Returns:
@@ -235,7 +228,6 @@ def run_log_analysis_sync(
         use_lib_log_analysis,
         slack_bot_token=slack_bot_token,
         slack_channel=slack_channel,
-        dataflow_index=dataflow_index,
         cluster_name=cluster_name,
     ):
         return None
@@ -279,7 +271,6 @@ def notify_log_path_sync(
     use_lib_log_analysis: Optional[bool] = None,
     slack_bot_token: Optional[str] = None,
     slack_channel: str = "",
-    dataflow_index: str = "",
     cluster_name: str = "",
 ) -> None:
     """Register ``log_path`` for job tracking via controller ``submit_log`` only.
@@ -298,7 +289,6 @@ def notify_log_path_sync(
         use_lib_log_analysis,
         slack_bot_token=slack_bot_token,
         slack_channel=slack_channel,
-        dataflow_index=dataflow_index,
         cluster_name=cluster_name,
     ):
         logger.debug("notify_log_path_sync: controller not ready; skip %s", log_path)

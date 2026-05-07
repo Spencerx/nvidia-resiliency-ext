@@ -10,6 +10,18 @@ def _job():
     return SimpleNamespace(job_id="123")
 
 
+def _item(raw_text, reason_code):
+    return {
+        "raw_text": raw_text,
+        "auto_resume": raw_text.split("\n", 1)[0],
+        "auto_resume_explanation": "",
+        "attribution_text": "",
+        "checkpoint_saved_flag": 0,
+        "primary_issues": [],
+        "secondary_issues": [],
+    }
+
+
 def test_log_attribution_result_uses_recommendation_over_raw_state(capsys):
     response = {
         "recommendation": {
@@ -19,9 +31,8 @@ def test_log_attribution_result_uses_recommendation_over_raw_state(capsys):
         },
         "result": {
             "module": "log_analyzer",
-            "state": "STOP",
             "result_id": "abcdef0123456789",
-            "result": ["raw backend text"],
+            "result": [_item("raw backend text", "UNKNOWN")],
         },
     }
 

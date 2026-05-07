@@ -83,7 +83,7 @@ Two layers: **library** (`nvidia_resiliency_ext.attribution`) and **service**
 
 | Layer | See |
 |-------|-----|
-| Library layout, pipelines, types | **ARCHITECTURE.md**, `log_analyzer/types.py`, `log_analyzer/analysis_pipeline.py` |
+| Library layout, pipelines, types | **ARCHITECTURE.md**, `orchestration/types.py`, `orchestration/analysis_pipeline.py` |
 | Service files, deploy scripts | **README.md** (`deploy/`, `app.py`, `service.py`, `config.py`) |
 
 ================================================================================
@@ -99,10 +99,10 @@ Summary:
 - **`LLM_API_KEY`** / **`LLM_API_KEY_FILE`**: required for attribution (or default key files);
   validated by `AttributionController` at startup — **empty/missing → log error and startup failure**.
   Slack is optional.
-- LLM-related env vars are optional; unset → library defaults (`LogAnalyzerConfig`).
+- LLM-related env vars are optional; unset → lower-layer LogSage/MCP defaults.
 - Rate limits: slowapi, `RATE_LIMIT_SUBMIT` / `RATE_LIMIT_ANALYZE` / `RATE_LIMIT_PREVIEW`.
 
-**3.2 Constants** (library `log_analyzer/config.py` — single source)
+**3.2 Constants** (library `orchestration/config.py` — single source)
 
 | Kind | Examples |
 |------|-----------|
@@ -147,7 +147,7 @@ Patterns tried in order (scheduler-agnostic where possible): `_(\d+)_date_`,
 **Startup (conceptual)**  
 Load `Settings` → configure logging → construct `AttributionHttpAdapter` /
 **`AttributionController`** / **`Analyzer`**. Controller startup validates the LLM
-API key and wires postprocessing (poster, dataflow index, Slack) before analysis
+API key and wires postprocessing (direct dataflow HTTP poster, Slack) before analysis
 begins. Then background poll → Uvicorn. Optional cache import.
 
 **Shutdown**  
@@ -164,18 +164,29 @@ Do **not** mirror Python dataclasses or Pydantic models here — they drift.
 
 | Concept | Canonical location |
 |---------|-------------------|
-| `Job`, `FileInfo`, jobs dict | `log_analyzer/job.py` |
-| `LogAnalysisCycleResult`, `LogAnalysisSplitlogResult`, `LogAnalyzerError` | `attribution/log_analyzer/types.py` |
+| `Job`, `FileInfo`, jobs dict | `orchestration/job.py` |
+| `LogAnalysisCycleResult`, `LogAnalysisSplitlogResult`, `LogAnalyzerError` | `orchestration/types.py` |
 | HTTP request/response models | `app.py` (FastAPI / Pydantic) |
-| Per-file LLM result shape (`cycles`, …) | Produced by analyzer; **ARCHITECTURE.md §7–8** |
+| LogSage / Log+FR / FR result shape (`module`, `result`, `recommendation`) | Produced by analyzer; **ARCHITECTURE.md §7–8** |
 
 **Analysis result (per workload chunk)** — illustrative keys only:
 
 ```json
 {
-  "cycles": [{"cycle": 0, "analysis": {}}],
-  "file_path": "/path/to/log",
-  "analyzed_at": 1234567890.123
+  "module": "log_analyzer",
+  "recommendation": {"action": "RESTART", "source": "log_analyzer"},
+  "result": [
+    {
+      "raw_text": "RESTART IMMEDIATE\ntransient issue",
+      "auto_resume": "RESTART IMMEDIATE",
+      "auto_resume_explanation": "transient issue",
+      "attribution_text": "transient issue",
+      "checkpoint_saved_flag": 0,
+      "action": "RESTART",
+      "primary_issues": [],
+      "secondary_issues": []
+    }
+  ]
 }
 ```
 
@@ -199,7 +210,7 @@ mitigates abuse.
 | GET | /print | First 4KB preview (`log_path`) |
 | GET | /inflight | In-flight analyses |
 | POST | /logs | Register job (`log_path`, `user`, optional `job_id`) |
-| GET | /logs | Analyze / return results (`log_path`, optional `file`, `wl_restart`, `all_files`) |
+| GET | /logs | Analyze / return results (`log_path`, optional `file`, `wl_restart`) |
 
 **GET /healthz**  
 Uses cumulative compute stats (errors + timeouts vs total) and dataflow failure rate
@@ -221,12 +232,14 @@ Response: `{ "mode": "pending" | "single" | "splitlog" }`.
 
 **GET /logs**  
 Returns single-file or splitlog-shaped JSON; optional `file` selects a file in
-splitlog mode; `wl_restart` selects a chunk; `all_files` returns completed files.
+splitlog mode; `wl_restart` selects a workload chunk within the analyzed file.
 Exact fields match library serializers — see **`types.py`** and OpenAPI **`/docs`**.
 Responses include a normalized `recommendation` object:
-`{ "action": "STOP" | "RESTART" | "CONTINUE" | "UNKNOWN" | "TIMEOUT", "reason": str,
-"source": str }`. Clients should branch on `recommendation.action`; raw backend
-output remains under `result` for debugging and backward compatibility.
+`{ "action": "STOP" | "RESTART" | "CONTINUE" | "UNKNOWN" | "TIMEOUT",
+"source": str }`. Clients should branch on
+`recommendation.action`; raw backend output remains under `result` for debugging.
+Flight-recorder findings are monitor-only; missing/hanging ranks are exposed in
+FR result fields and dataflow records, not as restart/stop policy.
 
 **6.1 GET /logs — processing flow (implementation)**
 
@@ -264,7 +277,7 @@ flowchart TD
 ```
 
 Notes: Coalescer key is the normalized log file path. `ANALYSIS_BACKEND` (`NVRX_ATTRSVC_ANALYSIS_BACKEND`) defaults to
-`mcp` (set `lib` for in-process LogSage and FR); legacy `NVRX_ATTRSVC_LOG_ANALYSIS_BACKEND` is accepted. See **ARCHITECTURE.md §7**. Splitlog: with `file=`, key is the per-file path.
+`mcp` (set `lib` for in-process LogSage and FR). See **ARCHITECTURE.md §7**. Splitlog: with `file=`, key is the per-file path.
 
 **curl / examples** — **README.md** (avoid duplicating here).
 
@@ -333,7 +346,7 @@ Availability, retries, timeouts, MCP vs lib — **ARCHITECTURE.md §7–9**, `Lo
 `RequestCoalescer.compute_timeout`.
 
 13. LOG FILE MARKER PARSING  
-Algorithms and edge cases — **ARCHITECTURE.md** and `log_analyzer` / splitlog modules.
+Algorithms and edge cases — **ARCHITECTURE.md** and orchestration / splitlog modules.
 
 ================================================================================
                             SPLITLOG (CONDENSED)
@@ -341,8 +354,10 @@ Algorithms and edge cases — **ARCHITECTURE.md** and `log_analyzer` / splitlog 
 
 14–17. **Activation:** `job_id` + `LOGS_DIR` readable. **Tracker:** discovers files,
 sorts (cycle / timestamp / mtime per implementation), triggers analysis, coordinates
-with poll thread. **GET:** `file` / `wl_restart` / `all_files` query params.  
-**Full behavior:** **ARCHITECTURE.md**, `splitlog_tracker`, `attribution/analyzer/engine.py` (`Analyzer`).
+with poll thread. **GET:** `file` selects a splitlog file; `wl_restart` selects a
+workload chunk within that file.
+**Full behavior:** **ARCHITECTURE.md**, `orchestration/splitlog.py`,
+`attribution/analyzer/engine.py` (`Analyzer`).
 
 ================================================================================
 
@@ -371,7 +386,7 @@ and inline comments in **`Analyzer`** / `RequestCoalescer`. Do not duplicate her
   submissions, …), splitlog folder stats under the `splitlog` key, `detection`,
   `deferred`, `permission_errors`, poll gauges, etc. — **exact keys per implementation**.
 - **Controller/adapter** (`AttributionController.get_stats`, exposed by
-  `AttributionHttpAdapter.get_stats`): adds **`dataflow`** (ES/dataflow post
+  `AttributionHttpAdapter.get_stats`): adds **`dataflow`** (direct HTTP post
   attempts) and **`slack`** (attempts, successes, failures, user lookup stats when enabled).
 
 Refer to live **`GET /stats`** response or OpenAPI for the current JSON shape.
@@ -381,8 +396,9 @@ Refer to live **`GET /stats`** response or OpenAPI for the current JSON shape.
 21. DATAFLOW & SLACK (OPTIONAL)
 --------------------------------------------------------------------------------
 
-Postprocessing posts results when `DATAFLOW_INDEX` / cluster env configured; Slack
-when `SLACK_BOT_TOKEN` set or token fallback files are present. Wiring:
+Postprocessing posts results when `DATAFLOW_HTTP_URL` is configured with the
+complete posting URI. No endpoint is built into the package. Slack posts when
+`SLACK_BOT_TOKEN` set or token fallback files are present. Wiring:
 `Settings` → `AttributionControllerConfig` → `AttributionController`. Record build:
 `build_dataflow_record`; backend: `postprocessing/post_backend.py`. Retry behavior in
 implementation.
