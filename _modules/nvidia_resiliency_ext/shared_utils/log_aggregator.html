@@ -5,7 +5,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>nvidia_resiliency_ext.shared_utils.log_aggregator &mdash; nvidia-resiliency-ext 0.1 documentation</title>
+  <title>nvidia_resiliency_ext.shared_utils.log_aggregator &mdash; nvidia-resiliency-ext 0.7.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=b86133f3" />
       <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
@@ -13,7 +13,7 @@
   
       <script src="../../../_static/jquery.js?v=5d32c60e"></script>
       <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
-      <script src="../../../_static/documentation_options.js?v=2709fde1"></script>
+      <script src="../../../_static/documentation_options.js?v=fe7df9b0"></script>
       <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
       <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -44,6 +44,7 @@
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Documentation contents:</span></p>
 <ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../release-notes.html">Release Notes</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../fault_tolerance/index.html">Fault Tolerance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../inprocess/index.html">Inprocess Restart</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../checkpointing/async/index.html">Async Checkpointing</a></li>
@@ -94,7 +95,7 @@
 <span class="c1"># See the License for the specific language governing permissions and</span>
 <span class="c1"># limitations under the License.</span>
 
-<span class="sd">"""</span>
+<span class="sa">r</span><span class="sd">"""</span>
 <span class="sd">Node-Local Log Aggregator Service</span>
 
 <span class="sd">This module provides a standalone log aggregator service for single-node log collection.</span>
@@ -103,6 +104,7 @@
 <span class="sd">shared filesystem (e.g., Lustre or NFS).</span>
 
 <span class="sd">**Key Features:**</span>
+
 <span class="sd">- **File-based**: Monitors temp directory for log files from local processes</span>
 <span class="sd">- **Single-node scope**: Aggregates logs from all processes on one node</span>
 <span class="sd">- **Per-node output**: Each node writes its own log file</span>
@@ -110,24 +112,42 @@
 
 <span class="sd">**Comparison with grpc_log_server.py:**</span>
 
-<span class="sd">+--------------------+-------------------------+---------------------------+</span>
-<span class="sd">|                    | log_aggregator.py       | grpc_log_server.py       |</span>
-<span class="sd">+--------------------+-------------------------+---------------------------+</span>
-<span class="sd">| Scope              | Single node             | Multi-node (cluster)      |</span>
-<span class="sd">| Transport          | File-based (temp dir)   | Network (gRPC)            |</span>
-<span class="sd">| Input              | All processes on 1 node | All nodes in cluster      |</span>
-<span class="sd">| Output             | Per-node log files      | Single centralized file   |</span>
-<span class="sd">| Lustre writers     | N (one per node)        | 1 (optimal)               |</span>
-<span class="sd">| Deployment         | Manual (sbatch)         | Automatic (launcher)      |</span>
-<span class="sd">+--------------------+-------------------------+---------------------------+</span>
+<span class="sd">.. list-table::</span>
+<span class="sd">   :header-rows: 1</span>
+
+<span class="sd">   * - Property</span>
+<span class="sd">     - log_aggregator.py</span>
+<span class="sd">     - grpc_log_server.py</span>
+<span class="sd">   * - Scope</span>
+<span class="sd">     - Single node</span>
+<span class="sd">     - Multi-node (cluster)</span>
+<span class="sd">   * - Transport</span>
+<span class="sd">     - File-based (temp dir)</span>
+<span class="sd">     - Network (gRPC)</span>
+<span class="sd">   * - Input</span>
+<span class="sd">     - All processes on 1 node</span>
+<span class="sd">     - All nodes in cluster</span>
+<span class="sd">   * - Output</span>
+<span class="sd">     - Per-node log files</span>
+<span class="sd">     - Single centralized file</span>
+<span class="sd">   * - Lustre writers</span>
+<span class="sd">     - N (one per node)</span>
+<span class="sd">     - 1 (optimal)</span>
+<span class="sd">   * - Deployment</span>
+<span class="sd">     - Manual (sbatch)</span>
+<span class="sd">     - Automatic (launcher)</span>
 
 <span class="sd">**When to use:**</span>
+
 <span class="sd">- Use `log_aggregator.py` for node-local aggregation (multiple processes → one node file)</span>
 <span class="sd">- Use `grpc_log_server.py` for cluster-wide centralization (multiple nodes → one global file)</span>
 
 <span class="sd">Example sbatch Usage:</span>
 
-<span class="sd"># For PyPI installation:</span>
+<span class="sd">For PyPI installation:</span>
+
+<span class="sd">.. code-block:: bash</span>
+
 <span class="sd">    export NVRX_NODE_LOCAL_TMPDIR=/tmp/nvrx</span>
 <span class="sd">    # Call python module directly</span>
 <span class="sd">    srun \</span>
@@ -141,7 +161,10 @@
 <span class="sd">          touch "${WAIT_FILE}"</span>
 <span class="sd">        '</span>
 
-<span class="sd"># For source installation:</span>
+<span class="sd">For source installation:</span>
+
+<span class="sd">.. code-block:: bash</span>
+
 <span class="sd">    export NVRX_NODE_LOCAL_TMPDIR=/tmp/nvrx</span>
 <span class="sd">    NVRX_REPO=/../nvidia-resiliency-ext:/nvrx_repo</span>
 

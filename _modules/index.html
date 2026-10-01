@@ -5,7 +5,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Overview: module code &mdash; nvidia-resiliency-ext 0.1 documentation</title>
+  <title>Overview: module code &mdash; nvidia-resiliency-ext 0.7.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
       <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -13,7 +13,7 @@
   
       <script src="../_static/jquery.js?v=5d32c60e"></script>
       <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
-      <script src="../_static/documentation_options.js?v=2709fde1"></script>
+      <script src="../_static/documentation_options.js?v=fe7df9b0"></script>
       <script src="../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
       <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -44,6 +44,7 @@
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Documentation contents:</span></p>
 <ul>
+<li class="toctree-l1"><a class="reference internal" href="../release-notes.html">Release Notes</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../fault_tolerance/index.html">Fault Tolerance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../inprocess/index.html">Inprocess Restart</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../checkpointing/async/index.html">Async Checkpointing</a></li>
@@ -77,7 +78,10 @@
            <div itemprop="articleBody">
              
   <h1>All modules for which code is available</h1>
-<ul><li><a href="nvidia_resiliency_ext/checkpointing/async_ckpt/core.html">nvidia_resiliency_ext.checkpointing.async_ckpt.core</a></li>
+<ul><li><a href="nvidia_resiliency_ext/attribution/straggler/reporting.html">nvidia_resiliency_ext.attribution.straggler.reporting</a></li>
+<li><a href="nvidia_resiliency_ext/attribution/straggler/statistics.html">nvidia_resiliency_ext.attribution.straggler.statistics</a></li>
+<li><a href="nvidia_resiliency_ext/attribution/straggler/straggler.html">nvidia_resiliency_ext.attribution.straggler.straggler</a></li>
+<li><a href="nvidia_resiliency_ext/checkpointing/async_ckpt/core.html">nvidia_resiliency_ext.checkpointing.async_ckpt.core</a></li>
 <li><a href="nvidia_resiliency_ext/checkpointing/async_ckpt/filesystem_async.html">nvidia_resiliency_ext.checkpointing.async_ckpt.filesystem_async</a></li>
 <li><a href="nvidia_resiliency_ext/checkpointing/async_ckpt/state_dict_saver.html">nvidia_resiliency_ext.checkpointing.async_ckpt.state_dict_saver</a></li>
 <li><a href="nvidia_resiliency_ext/checkpointing/async_ckpt/torch_ckpt.html">nvidia_resiliency_ext.checkpointing.async_ckpt.torch_ckpt</a></li>
@@ -88,8 +92,19 @@
 <li><a href="nvidia_resiliency_ext/checkpointing/local/replication/strategies.html">nvidia_resiliency_ext.checkpointing.local.replication.strategies</a></li>
 <li><a href="nvidia_resiliency_ext/fault_tolerance/config.html">nvidia_resiliency_ext.fault_tolerance.config</a></li>
 <li><a href="nvidia_resiliency_ext/fault_tolerance/rank_monitor_client.html">nvidia_resiliency_ext.fault_tolerance.rank_monitor_client</a></li>
+<li><a href="nvidia_resiliency_ext/fault_tolerance/rank_monitor_server.html">nvidia_resiliency_ext.fault_tolerance.rank_monitor_server</a></li>
+<li><a href="nvidia_resiliency_ext/inprocess/abort.html">nvidia_resiliency_ext.inprocess.abort</a></li>
+<li><a href="nvidia_resiliency_ext/inprocess/compose.html">nvidia_resiliency_ext.inprocess.compose</a></li>
 <li><a href="nvidia_resiliency_ext/inprocess/exception.html">nvidia_resiliency_ext.inprocess.exception</a></li>
 <li><a href="nvidia_resiliency_ext/inprocess/finalize.html">nvidia_resiliency_ext.inprocess.finalize</a></li>
+<li><a href="nvidia_resiliency_ext/inprocess/health_check.html">nvidia_resiliency_ext.inprocess.health_check</a></li>
+<li><a href="nvidia_resiliency_ext/inprocess/initialize.html">nvidia_resiliency_ext.inprocess.initialize</a></li>
+<li><a href="nvidia_resiliency_ext/inprocess/rank_assignment.html">nvidia_resiliency_ext.inprocess.rank_assignment</a></li>
+<li><a href="nvidia_resiliency_ext/inprocess/state.html">nvidia_resiliency_ext.inprocess.state</a></li>
+<li><a href="nvidia_resiliency_ext/inprocess/wrap.html">nvidia_resiliency_ext.inprocess.wrap</a></li>
+<li><a href="nvidia_resiliency_ext/ptl_resiliency/fault_tolerance_callback.html">nvidia_resiliency_ext.ptl_resiliency.fault_tolerance_callback</a></li>
+<li><a href="nvidia_resiliency_ext/ptl_resiliency/local_checkpoint_callback.html">nvidia_resiliency_ext.ptl_resiliency.local_checkpoint_callback</a></li>
+<li><a href="nvidia_resiliency_ext/ptl_resiliency/straggler_det_callback.html">nvidia_resiliency_ext.ptl_resiliency.straggler_det_callback</a></li>
 <li><a href="nvidia_resiliency_ext/shared_utils/log_aggregator.html">nvidia_resiliency_ext.shared_utils.log_aggregator</a></li>
 <li><a href="nvidia_resiliency_ext/shared_utils/log_manager.html">nvidia_resiliency_ext.shared_utils.log_manager</a></li>
 <li><a href="nvidia_resiliency_ext/shared_utils/log_node_local_tmp.html">nvidia_resiliency_ext.shared_utils.log_node_local_tmp</a></li>
